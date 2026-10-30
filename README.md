@@ -45,7 +45,7 @@ Generated artifacts, dependencies, local caches and downloaded fixtures are excl
 
 ## Using the viewer
 
-The globe uses satellite tiles. Drag to rotate, use the wheel or the plus/minus buttons to zoom, and change latitude/longitude to inspect another location. **Esplora 3D** enters flight over the point at the centre of the globe view. Double-clicking a point on the globe enters 3D there. The home button returns to the Rome demonstration in 3D.
+The globe uses satellite tiles. Drag to rotate with direct 1:1 surface tracking: the grabbed point stays under the pointer, with no acceleration or inertia after release. Use the wheel or the plus/minus buttons to zoom, and change latitude/longitude to inspect another location. **Esplora 3D** enters flight over the point at the centre of the globe view. Double-clicking a point on the globe enters 3D there. The home button returns to the Rome demonstration in 3D.
 
 In 3D, click the scene to capture the mouse. Escape releases it. The top controls switch modes, open the command guide and collapse the information panel. On small screens the information panel starts collapsed. Flight currently requires a keyboard and mouse; touch movement controls are not implemented.
 
