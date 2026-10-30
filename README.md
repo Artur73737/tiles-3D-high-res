@@ -236,6 +236,12 @@ The GPU budget estimates geometry and texture storage, excluding some driver ove
 
 The 3D byte cache respects HTTP freshness and uses LRU eviction. IndexedDB failure falls back to RAM and is reported in coverage. Browser origin, profile, storage quotas, clearing site data and expired entries affect reuse. Satellite textures use their own in-memory LRU plus normal browser HTTP caching. Neither layer builds a complete offline copy of the planet.
 
+## Network recovery
+
+3D requests retry transient connection failures, interrupted response bodies, HTTP 408/429 and server errors automatically, with at most three attempts and a 15-second timeout per attempt. Retries remain inside the existing concurrency limit. Missing resources, access-denied responses and byte-budget failures are not retried. Server-directed retry delays are respected; delays longer than the request timeout remain explicit failures.
+
+A failed entry into 3D returns to the usable globe instead of leaving the viewer stuck in loading. After connectivity returns, select **Esplora 3D** again; a failed startup no longer poisons later attempts. Permanent network or browser access restrictions cannot be repaired by retries, and are reported without claiming complete coverage.
+
 ## Validation
 
 Download the small captured protocol fixtures before running source tests:
@@ -250,6 +256,7 @@ npm run test:viewer
 npm run test:rotation
 npm run test:automatic
 npm run test:altitude
+npm run test:network
 ```
 
 `npm run fixtures` verifies the byte length and SHA-256 from `test/fixtures/manifest.json`, reuses matching local captures and refuses to overwrite mismatching files. If the provider changes or removes a pinned response, acquisition fails explicitly; it does not silently replace a golden fixture. The binary responses are not committed.
@@ -263,7 +270,7 @@ npm run test:viewer
 
 Source tests cover real captured decoding, terminal traversal, unknown metadata, cache freshness, cancellation, late completion, resource disposal, capacity recovery, altitude gating, request prioritization, local collision inventory, preview retirement, rotation retention and satellite patch geometry. Browser tests require live network access and write ignored reports/screenshots into `test-results/`.
 
-The viewer test checks satellite detail growth, independent layer demand, flight entry and responsive UI. The rotation test checks object identity/retention after turning away and back. The automatic test checks two-kilometre demand, distant previews and camera-following; it intentionally stops before all distant terminal tiles finish. The altitude test checks pause/resume while flying and explicit pause in globe mode. Some headless tests cap rendering at approximately 10 fps to control software-rendering cost; the actual viewer has no such cap.
+The network test injects startup, metadata and tile-request failures in Chrome and checks automatic recovery, bounded failure, and a successful second entry into flight. The viewer test checks satellite detail growth, independent layer demand, flight entry and responsive UI. The rotation test checks object identity/retention after turning away and back. The automatic test checks two-kilometre demand, distant previews and camera-following; it intentionally stops before all distant terminal tiles finish. The altitude test checks pause/resume while flying and explicit pause in globe mode. Some headless tests cap rendering at approximately 10 fps to control software-rendering cost; the actual viewer has no such cap.
 
 `test/performance.mjs` provides a Windows Chrome process-family benchmark for a completed 50 m region with cold and warm persistent-cache runs. It records elapsed time, transferred bytes, sampled CPU and memory; shared working sets and unsampled peaks limit those measurements. It does not measure agent tokens. `test/profile.mjs` is a local profiling helper. These tools do not establish a universal loading speed.
 

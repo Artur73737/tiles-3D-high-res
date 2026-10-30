@@ -13,7 +13,8 @@
     "test:performance": "node test/performance.mjs",
     "test:viewer": "node test/viewer.mjs",
     "test:rotation": "node test/rotation.mjs",
-    "fixtures": "node scripts/fetch-fixtures.mjs"
+    "fixtures": "node scripts/fetch-fixtures.mjs",
+    "test:network": "node test/network.mjs"
   },
   "dependencies": {
     "three": "0.180.0",

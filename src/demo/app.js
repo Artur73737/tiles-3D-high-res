@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
-import {EarthHQStreaming,SatelliteLayer,geoToECEF,ecefToGeo,localFrame} from '../index.js';
+import {EarthHQStreaming,SatelliteLayer,TileError,geoToECEF,ecefToGeo,localFrame} from '../index.js';
 import {Explorer} from './Player.js';
 import {PlayerWorld} from './PlayerWorld.js';
 import {SprintInput} from './SprintInput.js';
@@ -24,8 +24,9 @@ const streamer=new EarthHQStreaming({renderer,radiusMeters:visibility,retainRadi
 const world=new PlayerWorld(streamer),input=new SprintInput(),clock=new THREE.Clock();
 let player=null,frame=null,mode='loading',locked=false,yaw=0,pitch=.08,navToken=0,lastHud=0,lastToast=0,error=null,booting=false;
 function toast(text){$('toast').textContent=text;$('toast').classList.add('visible');clearTimeout(toast.timer);toast.timer=setTimeout(()=>$('toast').classList.remove('visible'),2800);}
-function showError(e){if(e.name==='AbortError')return;error=e;$('error').textContent=e.message;$('error').hidden=false;}
+function showError(e){if(e.name==='AbortError')return;error=e;$('error').textContent=['network_error','network_timeout'].includes(e.code)?(mode==='player'?'Connessione alle tile 3D temporaneamente non disponibile. Lo streaming riprovera automaticamente.':'Connessione alle tile 3D non riuscita dopo i tentativi automatici. Controlla la connessione e riprova con Esplora 3D.'):e.message;$('error').hidden=false;}
 streamer.addEventListener('error',({error})=>showError(error));streamer.addEventListener('warning',({error})=>toast(error.message));
+streamer.addEventListener('progress',({coverage})=>{if(coverage.complete&&['network_error','network_timeout','http_error'].includes(error?.code)){error=null;$('error').hidden=true;}});
 function applyPlayerCamera(){if(!frame||!player)return;camera.position.copy(player.eye).applyMatrix4(frame.toECEF);const rotation=new THREE.Quaternion().setFromRotationMatrix(frame.toECEF),look=new THREE.Quaternion().setFromEuler(new THREE.Euler(pitch,yaw,0,'YXZ'));camera.quaternion.copy(rotation.multiply(look));camera.up.copy(frame.up);}
 function streamView(focus){
  const normal=focus.clone().normalize();
@@ -35,18 +36,21 @@ function streamView(focus){
  streamer.update(camera,{focusECEF:focus,radiusMeters:visibility,viewDirectionECEF:direction.lengthSq()>1e-10?direction:null,viewHalfAngle:halfAngle,nearRadiusMeters:Math.min(60,visibility)});
 }
 async function enterAt(latitude,longitude){
+ const token=++navToken;
+ try{
  if(!Number.isFinite(latitude)||latitude< -90||latitude>90||!Number.isFinite(longitude))throw Error('Coordinate non valide.');
- longitude=((longitude+180)%360+360)%360-180;const token=++navToken;mode='loading';booting=true;error=null;input.reset();document.exitPointerLock();controls.enabled=false;$('error').hidden=true;$('lat').value=latitude.toFixed(6);$('lon').value=longitude.toFixed(6);
+ longitude=((longitude+180)%360+360)%360-180;mode='loading';booting=true;error=null;input.reset();document.exitPointerLock();controls.enabled=false;$('error').hidden=true;$('lat').value=latitude.toFixed(6);$('lon').value=longitude.toFixed(6);
  streamer.group.visible=true;
  const planet=await streamer.start();if(token!==navToken)return;
  frame=localFrame(latitude,longitude,planet.radius);const target=geoToECEF(latitude,longitude,0,planet.radius);
  camera.position.copy(target).addScaledVector(frame.up,100).addScaledVector(frame.south,70);camera.up.copy(frame.up);camera.lookAt(target);
  // Local ground first; distant HQ tiles never gate the landing.
  const coverage=await streamer.requestRegion({latitude,longitude,radiusMeters:Math.min(50,visibility)});if(token!==navToken)return;
- if(!coverage.complete)throw Error('Superficie locale incompleta: '+coverage.missingLeaves+' tile mancanti, '+coverage.unknownBranches+' rami irrisolti.');
+ if(!coverage.complete){const problem=coverage.errors[0];if(problem)throw new TileError(problem.code,problem.message,problem.details);throw Error('Superficie locale incompleta: '+coverage.missingLeaves+' tile mancanti, '+coverage.unknownBranches+' rami irrisolti.');}
  if(!coverage.requiredLeaves)throw Error('Il servizio non dichiara tile 3D disponibili in questo punto.');
  world.setFrame(frame);world.refresh(new THREE.Vector3(),{all:true});
  player=new Explorer(world,{min:[-Infinity,-10000,-Infinity],max:[Infinity,10000,Infinity]});player.findSpawn();player.place(player.spawn.clone().add(new THREE.Vector3(0,80,0)));player.flying=true;player.grounded=false;yaw=0;pitch=-.18;mode='player';booting=false;scene.background=new THREE.Color(0xbacfdc);applyPlayerCamera();streamView(player.feet.applyMatrix4(frame.toECEF));
+ }catch(e){if(token!==navToken)return;globeView();showError(e);}
 }
 function globeView(){navToken++;booting=false;mode='globe';streamer.group.visible=false;streamer.setEnabled(false);input.reset();document.exitPointerLock();scene.background=new THREE.Color(0x070f1d);const direction=frame?frame.up:camera.position.clone().normalize();camera.position.copy(direction).multiplyScalar((streamer.planet?.radius??6371010)*2.6);camera.up.set(0,0,1);camera.lookAt(0,0,0);controls.target.set(0,0,0);controls.enabled=true;controls.update();}
 function rebase(){
@@ -55,10 +59,10 @@ function rebase(){
  const safeECEF=player.safe.clone().applyMatrix4(frame.toECEF),spawnECEF=player.spawn.clone().applyMatrix4(frame.toECEF);frame=newFrame;world.setFrame(frame);player.place(feetECEF.applyMatrix4(frame.fromECEF));player.safe.copy(safeECEF.applyMatrix4(frame.fromECEF));player.spawn.copy(spawnECEF.applyMatrix4(frame.fromECEF));world.refresh(player.feet,{all:true});
 }
 renderer.domElement.addEventListener('click',async()=>{if(mode==='player')try{await renderer.domElement.requestPointerLock();}catch(e){showError(e);}});
-function coordinateChange(){if($('lat').value===''||$('lon').value==='')return;const lat=Number($('lat').value),lon=Number($('lon').value);if(!Number.isFinite(lat)||Math.abs(lat)>90||!Number.isFinite(lon)){showError(Error('Coordinate non valide.'));return;}if(mode==='globe'){const radius=streamer.planet?.radius??6371010,height=Math.max(40,camera.position.length()-radius);camera.position.copy(geoToECEF(lat,lon,height,radius));camera.lookAt(0,0,0);controls.update();}else enterAt(lat,lon).catch(e=>{booting=false;showError(e);});}
+function coordinateChange(){if($('lat').value===''||$('lon').value==='')return;const lat=Number($('lat').value),lon=Number($('lon').value);if(!Number.isFinite(lat)||Math.abs(lat)>90||!Number.isFinite(lon)){showError(Error('Coordinate non valide.'));return;}if(mode==='globe'){const radius=streamer.planet?.radius??6371010,height=Math.max(40,camera.position.length()-radius);camera.position.copy(geoToECEF(lat,lon,height,radius));camera.lookAt(0,0,0);controls.update();}else enterAt(lat,lon);}
 $('lat').addEventListener('change',coordinateChange);$('lon').addEventListener('change',coordinateChange);$('globe').addEventListener('click',globeView);
-$('terrain').addEventListener('click',()=>{if(mode==='globe'){const geo=ecefToGeo(camera.position);enterAt(geo.latitude,geo.longitude).catch(e=>{booting=false;showError(e);});}});
-$('home').addEventListener('click',()=>enterAt(41.88931,12.49223).catch(e=>{booting=false;showError(e);}));
+$('terrain').addEventListener('click',()=>{if(mode==='globe'){const geo=ecefToGeo(camera.position);enterAt(geo.latitude,geo.longitude);}});
+$('home').addEventListener('click',()=>enterAt(41.88931,12.49223));
 $('help').addEventListener('click',()=>{document.exitPointerLock();$('help-dialog').showModal();});
 let panelCustomized=false;
 function fitPanel(){if(!panelCustomized){const hidden=innerWidth<=620;document.body.classList.toggle('hide-panel',hidden);$('panel-toggle').setAttribute('aria-expanded',String(!hidden));}}
@@ -67,7 +71,7 @@ $('panel-toggle').addEventListener('click',()=>{panelCustomized=true;const hidde
 $('north').addEventListener('click',()=>{if(mode==='player'){yaw=0;applyPlayerCamera();}else{camera.up.set(0,0,1);controls.update();}});
 function zoomGlobe(factor){if(mode!=='globe')return;const radius=streamer.planet?.radius??6371010,height=Math.max(40,camera.position.length()-radius);camera.position.normalize().multiplyScalar(radius+Math.max(40,height*factor));controls.update();}
 $('zoom-in').addEventListener('click',()=>zoomGlobe(.55));$('zoom-out').addEventListener('click',()=>zoomGlobe(1.8));
-renderer.domElement.addEventListener('dblclick',event=>{if(mode!=='globe')return;const ray=new THREE.Raycaster();ray.setFromCamera(new THREE.Vector2(event.clientX/innerWidth*2-1,1-event.clientY/innerHeight*2),camera);const hit=ray.intersectObject(globe)[0];if(hit){const geo=ecefToGeo(hit.point);enterAt(geo.latitude,geo.longitude).catch(e=>{booting=false;showError(e);});}});
+renderer.domElement.addEventListener('dblclick',event=>{if(mode!=='globe')return;const ray=new THREE.Raycaster();ray.setFromCamera(new THREE.Vector2(event.clientX/innerWidth*2-1,1-event.clientY/innerHeight*2),camera);const hit=ray.intersectObject(globe)[0];if(hit){const geo=ecefToGeo(hit.point);enterAt(geo.latitude,geo.longitude);}});
 document.addEventListener('pointerlockchange',()=>{locked=document.pointerLockElement===renderer.domElement;input.reset();document.body.classList.toggle('playing',locked);clock.getDelta();});
 document.addEventListener('mousemove',event=>{if(locked&&mode==='player'){yaw-=event.movementX*.0021;pitch=THREE.MathUtils.clamp(pitch-event.movementY*.0021,-Math.PI/2+.02,Math.PI/2-.02);}});
 document.addEventListener('keydown',event=>{
@@ -111,6 +115,6 @@ function animate(){
   $('hint').innerHTML=mode==='globe'?'Trascina per ruotare · rotella per zoomare<br>Doppio clic su un punto per esplorarlo in 3D':locked?'<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> Muoviti &nbsp; <kbd>Esc</kbd> Libera il mouse<br>Doppio <kbd>Spazio</kbd> Volo &nbsp; <kbd>G</kbd> Globo':'Clicca sulla scena per iniziare a muoverti.<br><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> + mouse · doppio <kbd>Spazio</kbd> per volare';
  }
 }
-animate();if(params.get('view')==='3d')enterAt(41.88931,12.49223).catch(e=>{booting=false;showError(e);});else{globeView();streamer.start().catch(showError);}
+animate();if(params.get('view')==='3d')enterAt(41.88931,12.49223);else{globeView();streamer.start().catch(showError);}
 window.addEventListener('pagehide',()=>{satellite.dispose();world.dispose();streamer.dispose();});
 if(qa)window.__earthDemo={streamer,satellite,renderer,scene,camera,controls,world,input,enterAt,globeView,state:()=>({mode,locked,busy:booting,error:error?.message??null,sprint:!!input.keys.sprint,visibility,player:player?{feet:player.feet.toArray(),grounded:player.grounded,flying:player.flying,contacts:player.contactCount}:null}),look:(y,p=0)=>{yaw=y;pitch=p;},get player(){return player;},get frame(){return frame;},THREE};

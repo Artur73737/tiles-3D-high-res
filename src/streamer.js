@@ -29,7 +29,15 @@ export class EarthHQStreaming extends EventDispatcher {
   this.ownsSource=!source;this.transport=source?.transport??new ByteTransport({cache:this.cache,fetch,concurrency,maxResponseBytes});this.source=source??new RocktreeSource({transport:this.transport,baseUrl});
   this.assets=new Map();this.wanted=new Map();this.failed=new Map();this.active=new Map();this.readyCount=0;this.creditCounts=new Map();this.gpuBytes=0;this.disposed=false;this.enabled=true;this.generation=0;this.pendingSpec=null;this.discovery=null;this.lastSpec=null;this.discoveryError=null;this.discovering=false;this.queryCount=0;this.initializing=null;this.planet=null;this.credits=new Map();this.emptyLeaves=0;this.disposing=null;
  }
- async start(){if(this.disposed)throw aborted();if(!this.initializing)this.initializing=(async()=>{this.planet=await this.source.root();try{this.credits=await this.source.copyrights(this.planet.epoch);}catch(error){if(isAbort(error))throw error;this.dispatchEvent({type:'warning',error,phase:'attribution'});}return this.planet;})();return this.initializing;}
+ async start(){
+  if(this.disposed)throw aborted();
+  if(!this.initializing)this.initializing=(async()=>{
+   const planet=await this.source.root();if(this.disposed)throw aborted();this.planet=planet;
+   try{const credits=await this.source.copyrights(planet.epoch);if(this.disposed)throw aborted();this.credits=credits;}catch(error){if(isAbort(error))throw error;this.dispatchEvent({type:'warning',error,phase:'attribution'});}
+   return planet;
+  })().catch(error=>{this.initializing=null;throw error;});
+  return this.initializing;
+ }
  async requestRegion({latitude,longitude,focusECEF,radiusMeters=this.radiusMeters,viewDirectionECEF,viewHalfAngle=Math.PI,nearRadiusMeters=60,waitForCompletion=true}={}){
   if(!focusECEF&&(!Number.isFinite(latitude)||latitude< -90||latitude>90||!Number.isFinite(longitude)))throw new TileError('invalid_focus','Latitude or longitude invalid');
   const generation=++this.generation;
