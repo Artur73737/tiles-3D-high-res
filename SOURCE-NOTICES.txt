@@ -5,8 +5,8 @@ Remote data sources used by the viewer and bundle:
 2D: https://mt1.google.com/vt?lyrs=s&x={x}&y={y}&z={z}
 Both services are operated by Google. Imagery and map data remain the
 property of their respective owners. Runtime 3D copyright IDs are resolved
-through the service and displayed alongside the Google Maps attribution.
-These are undocumented endpoints, not the official Google Map Tiles API.
+through the service and displayed by the viewer.
+These are undocumented endpoints, not a supported public API.
 
 src/vendor/rocktree-decoder.cjs:
 Retained from the preceding local Colosseo protocol investigation.

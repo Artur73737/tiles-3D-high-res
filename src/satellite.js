@@ -14,7 +14,7 @@ export class SatelliteLayer {
   this.renderer=renderer;this.radius=radius;this.concurrency=concurrency;this.maxTiles=maxTiles;this.fetch=fetcher;
   this.group=new THREE.Group();this.group.name='Satellite 2D';
   this.nodes=new Map();this.resident=new Map();this.active=new Map();this.needed=new Set();this.queue=[];this.failed=new Map();
-  this.maxZoom=maxZoom;this.tileSize=256;this.credits='Google Maps';
+  this.maxZoom=maxZoom;this.tileSize=256;this.credits='';
   this.lastUpdate=-Infinity;this.disposed=false;this.requests=0;this.targetZoom=3;this.error=null;
   this.frustum=new THREE.Frustum();this.matrix=new THREE.Matrix4();this.cameraPosition=new THREE.Vector3();
  }

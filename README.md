@@ -141,7 +141,7 @@ terrain.start().then(() => {
     satellite.update(camera);
     terrain.update(camera, { focusECEF: focus });
     renderer.render(scene, camera);
-    // Display satellite.getAttribution() and terrain.getAttribution() in your UI.
+    // Display terrain.getAttribution() in your UI.
   });
 }).catch(console.error);
 
@@ -213,7 +213,6 @@ const satellite = new SatelliteLayer({
 });
 satellite.update(camera);
 const status = satellite.status();
-const credits = satellite.getAttribution();
 await satellite.dispose();
 ```
 
@@ -293,4 +292,4 @@ licenses/                 Third-party dependency notices
 
 Both layers use Google-operated services: Rocktree at `https://kh.google.com/rt/earth/` for 3D and the satellite raster endpoint at `https://mt1.google.com/vt` for 2D. These endpoints are undocumented and differ from the official Map Tiles API; availability, coverage, CORS behavior and protocol compatibility may change. This project is independent and is not an official provider SDK.
 
-Keep Google Maps attribution and the 3D runtime copyright credits visible. Data, imagery and the retained client-derived decoder are not granted a new license by this repository. Dependency MIT notices apply to their respective libraries, not to all bundled content. See [SOURCE-NOTICES.txt](SOURCE-NOTICES.txt) and [licenses](licenses) for provenance and notices.
+The viewer displays the 3D copyright credits returned by the service. Data, imagery and the retained client-derived decoder are not granted a new license by this repository. Dependency MIT notices apply to their respective libraries, not to all bundled content. See [SOURCE-NOTICES.txt](SOURCE-NOTICES.txt) and [licenses](licenses) for provenance and notices.

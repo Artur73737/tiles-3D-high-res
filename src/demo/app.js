@@ -101,7 +101,7 @@ function animate(){
   const height=Math.max(0,geo.altitude),sat=satellite.status();
   $('altitude').textContent='Quota '+(height>=10000?(height/1000).toLocaleString('it-IT',{maximumFractionDigits:0})+' km':height.toLocaleString('it-IT',{maximumFractionDigits:0})+' m');
   $('distance').textContent='Vista '+(visibility>=1000?(visibility/1000).toLocaleString('it-IT')+' km':visibility+' m');$('cache').textContent=(c.receivedBytes/1048576).toFixed(2)+' MB · '+(c.memoryHits+c.diskHits)+' riusi cache';$('persistent').textContent=c.cachePersistent?'Cache persistente attiva':'Cache in memoria';$('credits').textContent=streamer.getAttribution();
-  $('satellite-credits').textContent=satellite.credits;$('satellite-status').textContent=sat.pending?'Aggiornamento del dettaglio…':sat.visible?'Immagini aggiornate allo zoom':sat.error?'Immagini temporaneamente non disponibili':'Caricamento immagini…';
+  $('satellite-status').textContent=sat.pending?'Aggiornamento del dettaglio…':sat.visible?'Immagini aggiornate allo zoom':sat.error?'Immagini temporaneamente non disponibili':'Caricamento immagini…';
   $('terrain').setAttribute('aria-pressed',String(mode!=='globe'));$('globe').setAttribute('aria-pressed',String(mode==='globe'));$('zoom-in').disabled=$('zoom-out').disabled=mode!=='globe';
   $('place-name').textContent=Math.abs(geo.latitude-41.88931)<.02&&Math.abs(geo.longitude-12.49223)<.02?'Roma · Colosseo':'Posizione esplorata';
   $('status-title').textContent=mode==='globe'||c.status==='waiting-altitude'?'Vista satellitare':c.complete?'Dettaglio 3D pronto':mode==='loading'?'Preparazione della superficie':'Raffinamento del paesaggio';

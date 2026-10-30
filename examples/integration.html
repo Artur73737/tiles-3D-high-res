@@ -12,7 +12,7 @@ canvas { display:block; }
 </style>
 <body>
 <div id="status">Loading terrain and satellite imagery...</div>
-<div id="credits">Google Maps</div>
+<div id="credits"></div>
 <script src="../dist/earth-hq.bundle.js"></script>
 <script>
 const {THREE,EarthHQStreaming,SatelliteLayer,geoToECEF}=EarthHQ;
@@ -30,7 +30,7 @@ const satellite=new SatelliteLayer({renderer});scene.add(tiles.group,satellite.g
 const status=document.getElementById('status'),credits=document.getElementById('credits');
 tiles.addEventListener('progress',({coverage:c})=>{
  status.textContent=c.readyLeaves+' / '+c.requiredLeaves+' terminal tiles - '+c.status;
- credits.textContent=tiles.getAttribution()+' | Satellite: '+satellite.getAttribution();
+ credits.textContent=tiles.getAttribution();
 });
 tiles.addEventListener('error',({error})=>{status.textContent=error.message;});
 tiles.start().then(()=>renderer.setAnimationLoop(()=>{
