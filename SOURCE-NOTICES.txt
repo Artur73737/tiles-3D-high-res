@@ -1,0 +1,35 @@
+TILES 3D HIGH RES - SOURCES AND THIRD-PARTY NOTICES
+
+Remote data sources used by the viewer and bundle:
+3D: https://kh.google.com/rt/earth/
+2D: https://mt1.google.com/vt?lyrs=s&x={x}&y={y}&z={z}
+Both services are operated by Google. Imagery and map data remain the
+property of their respective owners. Runtime 3D copyright IDs are resolved
+through the service and displayed alongside the Google Maps attribution.
+These are undocumented endpoints, not the official Google Map Tiles API.
+
+src/vendor/rocktree-decoder.cjs:
+Retained from the preceding local Colosseo protocol investigation.
+This wrapper contains code derived from a Google web client decoder.
+It is not represented as newly authored code or relicensed under MIT here.
+Local correction: completed callbacks are deleted using the received message ID.
+Protocol reference: https://github.com/retroplasma/earth-reverse-engineering
+The reference project and the underlying client code have distinct provenance.
+
+test/fixtures/manifest.json records the original URLs, byte lengths and SHA-256
+digests of the three captured protocol fixtures. Binary fixtures are downloaded
+locally by scripts/fetch-fixtures.mjs, verified, and excluded from Git.
+
+docs/previews/ contains screenshots of this viewer. Their map imagery and 3D
+content retain the same third-party ownership as the live display. Preview
+images are documentation, not an independently licensed map-data distribution.
+
+The compiled engine includes Three.js 0.180.0 and decode-dxt 1.0.1.
+The compiled demo additionally includes three-mesh-bvh 0.9.1.
+Their complete MIT license notices are appended to the compiled artifacts and
+copied into licenses/. These notices do not grant additional rights to imagery,
+map data or client-derived decoder code. No blanket MIT license is claimed for
+this repository.
+
+Build tooling: esbuild 0.28.2; browser validation: playwright-core 1.64.1.
+The compiled viewer does not load build tools, Node.js or Playwright at runtime.

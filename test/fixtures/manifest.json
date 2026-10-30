@@ -1,0 +1,20 @@
+[
+  {
+    "file": "planet.pb",
+    "url": "https://kh.google.com/rt/earth/PlanetoidMetadata",
+    "bytes": 13,
+    "sha256": "3cc284fe32f2d3fe1e0145d54bcfcf63e1e1ecdeb50ee9d7a1eefe98a17a3504"
+  },
+  {
+    "file": "bulk.pb",
+    "url": "https://kh.google.com/rt/earth/BulkMetadata/pb=!1m2!1s30427242735060526245!2u1016",
+    "bytes": 2263,
+    "sha256": "29ef34dc3d453386ca555cbea61250cf127d7ceba535f903f6b333823ad3434f"
+  },
+  {
+    "file": "node.pb",
+    "url": "https://kh.google.com/rt/earth/NodeData/pb=!1m2!1s3042724273506052624521!2u1000!2e6!4b0",
+    "bytes": 24247,
+    "sha256": "2add52ae02dbb4a9b54e1a928bcbf7e1417185ba53e6e20d7b556ec0d19f2e6e"
+  }
+]
