@@ -89,13 +89,13 @@ Requests, decoded image ownership, view selection and LRU eviction are managed b
 
 `EarthHQStreaming` reads the Rocktree hierarchy and follows every selected branch to its declared terminal nodes. It does not stop at a hard-coded 3D level or substitute a reduced texture for the final payload. Terrain, buildings and additional layers present in the decoded payload are retained. This is a Rocktree client, not an OGC 3D Tiles implementation.
 
-The active demand follows the surface position and horizontal viewing direction. Near terrain is requested in every direction. Parent meshes provide a surrounding panorama while terminal geometry arrives. Close terminal tiles start loading while distant metadata discovery continues, and queued payload requests take priority over queued metadata requests.
+The active demand follows the surface position and horizontal viewing direction. Near terrain is requested in every direction. Parent meshes provide a surrounding panorama while terminal geometry arrives. Close terminal tiles start loading while distant metadata discovery continues. Downloads finish each nearby parent footprint together so the completed HQ meshes can immediately replace its coarse preview. Payload requests receive priority in bounded bursts, allowing metadata and distant previews to keep making progress. Metadata traversal bounds active branches by the configured concurrency and discards the obsolete traversal frontier when the view changes, rather than waiting for thousands of previously queued requests.
 
 Turning the camera updates demand without discarding already resident geometry inside the retention radius. Completed parent previews are hidden and retained for reuse; they are released under memory pressure or when outside the retained area. This avoids blanking the landscape merely because the camera turned. Retention is bounded, so travel, expiration, capacity pressure or a provider epoch change can still require another download.
 
 Automatic 3D requests start below **2,500 m**, pause above **3,000 m**, and resume on descent. The 500 m hysteresis avoids repeated restarts around the threshold. In the viewer, the globe mode explicitly pauses 3D loading; selecting 3D enters flight and enables automatic streaming. The satellite layer continues independently.
 
-`previewRadiusMeters: 120` in the viewer selects the maximum node-bound radius used for parent previews. It is not the viewing distance. Parent previews never count as completed maximum-detail leaves and are not used for collision detection.
+`previewRadiusMeters: 120` in the viewer sets the near-field node-bound target for parent previews. The allowed preview size grows with distance to provide a distant panorama without downloading thousands of equally fine previews first. This only changes temporary preview selection; final 3D demand still follows every selected branch to its terminal detail. It is not the viewing distance. Nearby parent footprints are examined in full, including descendants outside the current heading, and retired independently of the distant search. The periodic freshness check waits for current work to settle instead of repeatedly canceling unfinished discovery. Parent previews never count as completed maximum-detail leaves and are not used for collision detection.
 
 ### Coverage is explicit
 
@@ -229,7 +229,7 @@ await satellite.dispose();
 | IndexedDB byte budget | 512 MiB | 1 GiB |
 | Estimated 3D GPU budget | 512 MiB | 4 GiB |
 | Maximum individual 3D response | 64 MiB | 64 MiB |
-| Parent preview bound radius | Disabled | 120 m |
+| Near-field parent preview target | Disabled | 120 m; coarser temporary previews farther away |
 | Satellite requests / retained images | 8 / 512 | 8 / 512 |
 
 The GPU budget estimates geometry and texture storage, excluding some driver overhead and the separate satellite layer. A 4 GiB budget is substantial; lower it for constrained devices. Capacity exhaustion stops unusable new downloads and reports incomplete coverage. Move to a smaller area or increase the budget to resume.
