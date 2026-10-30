@@ -151,3 +151,60 @@ test('turning through 360 degrees preserves resident HQ and full-surround previe
   s.unload('east-parent-leaf');assert.equal(s.previews.get('east-parent').group.visible,true);
  }finally{await s.dispose();assert.equal(s.gpuBytes,0);assert.equal(s.visiblePreviewCount,0);assert.equal(s.previewPaths.size,0);}
 });
+
+test('gaze block reaches HQ before blocked off-screen ground, then progressively completes the rest',async()=>{
+ const data=source(),front={...data.parent,path:'2',key:'front',radius:40,center:new Vector3(6371010,500,0)},side={...front,path:'3',key:'side',center:new Vector3(6371010,0,700)};
+ const frontLeaf={...front,path:'20',key:'front-leaf',leaf:true,radius:5},sideLeaf={...side,path:'30',key:'side-leaf',leaf:true,radius:5};
+ let releaseNear,releaseSide;data.children=async n=>n.root?[data.parent,front,side]:n.path==='2'?[frontLeaf]:n.path==='1'?new Promise(r=>{releaseNear=()=>r(data.leaves);}):new Promise(r=>{releaseSide=()=>r([sideLeaf]);});
+ const s=new EarthHQStreaming({source:data,previewRadiusMeters:120,radiusMeters:1000,retainRadiusMeters:1100});
+ s.prioritizeView(new Vector3(6371090,0,0),new Vector3(-80,500,0).normalize());
+ const pending=s.requestRegion({latitude:0,longitude:0});
+ try{
+  for(let i=0;i<1000&&(!releaseNear||!s.assets.has('front-leaf'));i++)await tick();
+  assert.ok(s.assets.has('front-leaf'),'Visible terminal geometry must not wait for off-screen metadata');
+  assert.equal(s.assets.has('a'),false);assert.equal(s.getCoverage().complete,false);assert.equal(s.committedSpec.radius,0);
+  assert.equal(s.previews.get('front')?.group.visible,false);
+  releaseNear();
+  for(let i=0;i<1000&&(!releaseSide||!s.assets.has('b'));i++)await tick();
+  assert.ok(s.assets.has('b'));assert.equal(s.committedSpec.radius,60);assert.equal(s.getCoverage().complete,false);
+  releaseSide();const result=await pending;assert.equal(result.complete,true);assert.equal(result.readyLeaves,4);assert.equal(s.visiblePreviewCount,0);
+ }finally{releaseNear?.();releaseSide?.();await s.dispose();}
+});
+
+test('pitch and yaw reprioritize queued payloads without discarding resident meshes',async()=>{
+ const s=new EarthHQStreaming({source:source()}),focus=new Vector3(6371010,0,0),position=new Vector3(6371090,0,0);
+ const nodes=[{key:'ground',center:focus.clone().add(new Vector3(0,100,0)),radius:5},{key:'tower',center:focus.clone().add(new Vector3(200,100,0)),radius:5},{key:'side',center:focus.clone().add(new Vector3(0,0,100)),radius:5}];
+ s.lastSpec={focus,nearRadius:60};s.wanted=new Map(nodes.map(n=>[n.key,n]));
+ for(const [key,look]of [['ground',new Vector3(-80,100,0)],['tower',new Vector3(120,100,0)],['side',new Vector3(-80,0,100)]]){
+  s.prioritizeView(position,look.normalize());assert.equal(s.nextTerminal().key,key);
+ }
+ await s.dispose();
+});
+
+test('progressive inventories preserve a capacity stop instead of restarting failed downloads in every batch',async()=>{
+ const data=source(),parents=Array.from({length:12},(_,i)=>({...data.parent,path:'2'+i,key:'p'+i,radius:10,center:new Vector3(6371010,300+i*30,0)}));
+ data.children=async n=>n.root?[data.parent,...parents]:n.key==='parent'?data.leaves:[{...n,path:n.path+'0',key:n.key+'-leaf',leaf:true,radius:1}];
+ const s=new EarthHQStreaming({source:data,previewRadiusMeters:120,radiusMeters:1000,retainRadiusMeters:1100,maxGpuBytes:1,concurrency:1});
+ let terminalLoads=0;data.loadNode=async n=>{if(n.leaf)terminalLoads++;return payload();};
+ try{
+  const result=await s.requestRegion({latitude:0,longitude:0});
+  assert.equal(result.complete,false);assert.equal(result.requiredLeaves,14);assert.equal(terminalLoads,1);assert.equal(s.capacityBlocked,true);assert.equal(result.errors[0].code,'gpu_budget');
+  s.setGpuBudget(128*1024**2);assert.equal((await s.waitForIdle()).complete,true);
+ }finally{await s.dispose();}
+});
+
+test('a new gaze inventory keeps previously proven local collision coverage until replacement is ready',async()=>{
+ const data=source(),front={...data.parent,path:'2',key:'front',radius:40,center:new Vector3(6371010,500,0)},leaf={...front,path:'20',key:'front-leaf',leaf:true,radius:5};
+ const s=new EarthHQStreaming({source:data,previewRadiusMeters:120,radiusMeters:1000,retainRadiusMeters:1100});
+ let releaseNear;
+ try{
+  await s.requestRegion({latitude:0,longitude:0,radiusMeters:50});
+  data.children=async node=>node.root?[data.parent,front]:node.path==='2'?[leaf]:new Promise(resolve=>{releaseNear=()=>resolve(data.leaves);});
+  s.prioritizeView(new Vector3(6371090,0,0),new Vector3(-80,500,0).normalize());
+  const pending=s.requestRegion({latitude:0,longitude:0});
+  for(let i=0;i<1000&&(!releaseNear||!s.assets.has('front-leaf'));i++)await tick();
+  assert.ok(s.assets.has('front-leaf'));assert.equal(s.committedSpec.radius,50);assert.ok(s.wanted.has('a'));assert.ok(s.wanted.has('b'));
+  const world=new PlayerWorld(s);world.setFrame(localFrame(0,0));world.refresh(new Vector3(),{all:true});assert.equal(world.readyAt(new Vector3()),true);world.dispose();
+  releaseNear();assert.equal((await pending).complete,true);
+ }finally{releaseNear?.();await s.dispose();}
+});

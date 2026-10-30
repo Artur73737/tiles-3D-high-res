@@ -5,7 +5,7 @@ export class Explorer {
  constructor(world,bounds){
   this.world=world;this.bounds=bounds;this.radius=.28;this.height=1.72;
   this.capsule=new Capsule(new Vector3(),new Vector3(),this.radius);
-  this.velocity=new Vector3();this.grounded=false;this.flying=false;
+  this.velocity=new Vector3();this.grounded=false;this.flying=false;this.flightMultiplier=1;
   this.lastSpace=-Infinity;this.safe=new Vector3();this.spawn=new Vector3();
   this.contactCount=0;this.edgeBlocked=false;this.jumpQueued=false;
  }
@@ -27,7 +27,7 @@ export class Explorer {
   for(const z of [0,3,-3,8,-8,15,-15])for(const x of [0,-3,3,-8,8,-15,15]){
    const p=this.ground(x,z);if(p)candidates.push(p);
   }
-  if(!candidates.length)throw Error('Nessuna superficie calpestabile trovata nelle tile.');
+  if(!candidates.length)throw Error('No walkable surface found in the available tiles.');
   // Favor the exterior plaza, away from rooftop surfaces.
   const low=Math.min(...candidates.map(p=>p.y));
   const visible=candidates.filter(p=>{
@@ -40,6 +40,7 @@ export class Explorer {
   this.spawn.copy(good[0]);this.spawn.y+=.025;
   this.reset();return this.spawn;
  }
+ adjustFlightSpeed(delta){if(this.flying&&Number.isFinite(delta)&&delta!==0)this.flightMultiplier=Math.max(1,Math.min(16,this.flightMultiplier*(delta<0?1.25:.8)));return this.flightMultiplier;}
  reset(){this.place(this.spawn);this.safe.copy(this.spawn);this.flying=false;this.grounded=true;this.lastSpace=-Infinity;}
  space(time){
   if(time-this.lastSpace<310){this.flying=!this.flying;this.velocity.set(0,0,0);this.jumpQueued=false;this.lastSpace=-Infinity;return true;}
@@ -64,12 +65,12 @@ export class Explorer {
   const right=new Vector3(Math.cos(yaw),0,-Math.sin(yaw));
   const wish=new Vector3().addScaledVector(forward,Number(!!keys.KeyW)-Number(!!keys.KeyS)).addScaledVector(right,Number(!!keys.KeyD)-Number(!!keys.KeyA));
   if(wish.lengthSq()>1)wish.normalize();
-  const speed=(this.flying?8:3.1)*(keys.sprint?3:1);
+  const speed=(this.flying?8*this.flightMultiplier:3.1)*(keys.sprint?3:1);
   const blend=1-Math.exp(-12*dt);
   this.velocity.x+=(wish.x*speed-this.velocity.x)*blend;
   this.velocity.z+=(wish.z*speed-this.velocity.z)*blend;
   if(this.flying){
-   this.velocity.y=((keys.Space?1:0)-(keys.ShiftLeft||keys.ShiftRight?1:0))*6;
+   this.velocity.y=((keys.Space?1:0)-(keys.ShiftLeft||keys.ShiftRight?1:0))*6*this.flightMultiplier;
    this.jumpQueued=false;
   }else{
    if(this.jumpQueued){this.velocity.y=5.1;this.grounded=false;this.jumpQueued=false;}

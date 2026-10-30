@@ -21,7 +21,7 @@ export class EarthHQStreaming extends EventDispatcher {
   this.previewRadiusMeters=previewRadiusMeters;this.previewWanted=new Map();this.previews=new Map();this.previewQueue=[];this.previewCursor=0;this.previewRemaining=new Map();this.previewForLeaf=new Map();this.previewFailed=new Set();
   this.capacityBlocked=false;
   this.localDiscoveryReady=false;
-  this.terminalBurst=0;
+  this.terminalBurst=0;this.priorityView=null;
   this.previewRetirable=new Set();
   this.previewPaths=new Map();this.visiblePreviewCount=0;
   this.activationAltitudeMeters=activationAltitudeMeters;this.altitudeHysteresisMeters=altitudeHysteresisMeters;this.altitudePaused=true;this.cameraAltitudeMeters=null;
@@ -48,12 +48,14 @@ export class EarthHQStreaming extends EventDispatcher {
   const normal=focus.clone().normalize(),direction=viewDirection(focus,viewDirectionECEF);
   if(!Number.isFinite(viewHalfAngle)||viewHalfAngle<=0||viewHalfAngle>Math.PI||!Number.isFinite(nearRadiusMeters)||nearRadiusMeters<0)throw new TileError('invalid_options','Invalid view angle or near radius');
   this.enabled=true;this.altitudePaused=false;
-  const spec={focus:focus.normalize().multiplyScalar(this.planet.radius),normal,radius:radiusMeters,viewDirection:direction,viewHalfAngle,nearRadius:nearRadiusMeters,generation,at:Date.now()};this.lastSpec=spec;this.pendingSpec=spec;this.discovering=true;this.localDiscoveryReady=false;this.discoveryError=null;this.publish();this.pumpDiscovery();return waitForCompletion?this.waitForIdle():this.getCoverage();
+  const spec={focus:focus.normalize().multiplyScalar(this.planet.radius),normal,radius:radiusMeters,viewDirection:direction,viewHalfAngle,nearRadius:nearRadiusMeters,generation,at:Date.now()};this.lastSpec=spec;this.pendingSpec=spec;this.discovering=true;this.localDiscoveryReady=false;this.discoveryError=null;this.failed.clear();this.capacityBlocked=false;this.publish();this.pumpDiscovery();return waitForCompletion?this.waitForIdle():this.getCoverage();
  }
  update(camera,{focusECEF,radiusMeters=this.radiusMeters,viewDirectionECEF,viewHalfAngle=Math.PI,nearRadiusMeters=60}={}){
   if(this.disposed||!this.enabled||!this.planet)return;
   this.group.updateWorldMatrix(true,false);
-  const position=camera.getWorldPosition(new Vector3()).applyMatrix4(new Matrix4().copy(this.group.matrixWorld).invert());
+  const inverse=new Matrix4().copy(this.group.matrixWorld).invert();
+  const position=camera.getWorldPosition(new Vector3()).applyMatrix4(inverse);
+  this.prioritizeView(position,camera.getWorldDirection(new Vector3()).transformDirection(inverse));
   if(![position.x,position.y,position.z].every(Number.isFinite)||position.lengthSq()===0)return;
   this.cameraAltitudeMeters=position.length()-this.planet.radius;
   const paused=this.cameraAltitudeMeters>this.activationAltitudeMeters+(this.altitudePaused?0:this.altitudeHysteresisMeters);
@@ -75,39 +77,64 @@ export class EarthHQStreaming extends EventDispatcher {
      // Load a small set of real parent meshes before the expensive terminal
      // inventory. These never count as completed maximum-detail coverage.
      this.tileQueue=[];this.tileCursor=0;
-     let localInventory=null,nearRoots=[];
+     let nearRoots=[],terminals=[];
      if(this.previewRadiusMeters>0&&spec.radius>this.previewRadiusMeters){
-      const previews=new Map(),nearTerminals=[];
+      const previews=new Map();
       const selectPreview=node=>{
        if(node.empty)return false;
        if(!node.root&&!intersectsColumn(node,spec.normal,spec.radius))return false;
-       if(node.leaf){if(intersectsColumn(node,spec.normal,spec.nearRadius))nearTerminals.push(node);return false;}
+       if(node.leaf){if(intersectsRegion(node,spec))terminals.push(node);return false;}
        const previewSize=node.root?this.previewRadiusMeters:this.previewRadiusMeters+Math.max(0,node.center.distanceTo(spec.focus)-node.radius-spec.nearRadius)/6;
        if(node.hasData&&node.radius<=previewSize){previews.set(node.key,node);return false;}
        return true;
       };
       await this.walkMetadata([{root:true,epoch:this.planet.epoch}],spec.generation,selectPreview);
       if(this.disposed||spec.generation!==this.generation)continue;
-      this.previewWanted=previews;nearRoots=[...previews.values()].filter(node=>intersectsColumn(node,spec.normal,spec.nearRadius)).concat(nearTerminals);this.previewRemaining.clear();this.previewForLeaf.clear();this.previewRetirable.clear();this.previewFailed.clear();
+      this.previewWanted=previews;nearRoots=[...previews.values()].filter(node=>intersectsColumn(node,spec.normal,spec.nearRadius)).concat(terminals.filter(node=>intersectsColumn(node,spec.normal,spec.nearRadius)));this.previewRemaining.clear();this.previewForLeaf.clear();this.previewRetirable.clear();this.previewFailed.clear();
       for(const [key,asset]of this.previews)if(asset.expiresAt<=Date.now()||asset.rootEpoch!==this.planet.epoch||!intersectsColumn(asset.descriptor,spec.normal,Math.max(this.retainRadiusMeters,spec.radius)))this.unload(key);
-      this.previewQueue=[...previews.values()].sort((a,b)=>a.center.distanceToSquared(spec.focus)-b.center.distanceToSquared(spec.focus));this.previewCursor=0;this.pumpTiles();
+      this.previewQueue=[...previews.values()].sort((a,b)=>this.comparePriority(a,b,spec));this.previewCursor=0;this.pumpTiles();
      }else{
       this.previewWanted.clear();this.previewQueue=[];this.previewRemaining.clear();this.previewForLeaf.clear();this.previewRetirable.clear();for(const key of this.previews.keys())this.unload(key);
      }
      if(this.previewRadiusMeters>0&&spec.radius>this.previewRadiusMeters){
-      // Examine whole nearby parent footprints in every direction, so their
-      // coarse geometry can retire without waiting for the distant sector.
-      const localSpec={...spec,radius:Math.min(spec.radius,spec.nearRadius),viewDirection:null},local=await this.collectLeaves(localSpec,nearRoots,true);
+      const localSpec={...spec,radius:Math.min(spec.radius,spec.nearRadius),viewDirection:null};
+      // Preserve proven local coverage while a new view is discovered. Turning
+      // or moving must not freeze flight solely because the gaze pass began.
+      const previous=this.inventoryEpoch===this.planet.epoch?this.committedSpec:null;
+      const proven=previous?{...previous,radius:Math.min(previous.radius,previous.nearRadius),viewDirection:null}:null;
+      const seed=proven?[...this.wanted].filter(([,node])=>intersectsColumn(node,proven.normal,proven.radius)):[];
+      let accumulated={desired:new Map(seed),empty:0};
+      const examined=new Set();
+      const add=async(roots,coverageSpec)=>{
+       const result=await this.collectLeaves(spec,roots,true);
+       if(this.disposed||spec.generation!==this.generation)return false;
+       const desired=new Map(accumulated.desired);
+       for(const [key,node]of result.desired)desired.set(key,node);
+       accumulated={desired,empty:accumulated.empty+result.empty};
+       for(const root of roots)examined.add(root.key);
+       this.installInventory(accumulated,coverageSpec,false,roots);
+       return true;
+      };
+      // Complete the block under the gaze before inspecting off-screen ground.
+      // Reuse only an already examined collision disk, otherwise claim none.
+      const roots=[...this.previewWanted.values(),...terminals].filter(node=>intersectsRegion(node,spec));
+      roots.sort((a,b)=>this.comparePriority(a,b,spec));
+      if(this.priorityView&&roots.length&&!await add([roots[0]],proven??{...localSpec,radius:0}))continue;
+      if(!await add(nearRoots.filter(node=>!examined.has(node.key)),localSpec))continue;
+      // Publish each small completed inventory instead of waiting for the whole
+      // distant sector. This also avoids traversing the root hierarchy twice.
+      let remaining=roots.filter(node=>!examined.has(node.key));
+      while(remaining.length&&spec.generation===this.generation&&!this.disposed){
+       remaining.sort((a,b)=>this.comparePriority(a,b,spec));
+       if(!await add(remaining.splice(0,4),localSpec))break;
+      }
       if(this.disposed||spec.generation!==this.generation)continue;
-      localInventory=local;
-      this.installInventory(local,localSpec,false,nearRoots);
+      this.installInventory(accumulated,spec,true);
+     }else{
+      const inventory=await this.collectLeaves(spec);
+      if(this.disposed||spec.generation!==this.generation)continue;
+      this.installInventory(inventory,spec,true);
      }
-     const inventory=await this.collectLeaves(spec);
-     if(this.disposed||spec.generation!==this.generation)continue;
-     // Keep the full near footprints demanded until they are refined, even
-     // when the final directional sector excludes some of their descendants.
-     if(localInventory)for(const [key,node]of localInventory.desired)inventory.desired.set(key,node);
-     this.installInventory(inventory,spec,true);
     }catch(error){if(this.disposed||spec.generation!==this.generation)continue;this.discovering=false;this.discoveryError=error;this.dispatchEvent({type:'error',error,phase:'metadata'});this.publish();}
    }
   })().finally(()=>{this.discovery=null;if(this.pendingSpec&&!this.disposed)this.pumpDiscovery();this.publish();});
@@ -140,21 +167,50 @@ export class EarthHQStreaming extends EventDispatcher {
   });return {desired,empty};
  }
  installInventory({desired,empty},spec,final,wholeParents=[]){
-  this.wanted=desired;this.readyCount=0;for(const key of desired.keys())if(this.assets.has(key))this.readyCount++;this.tileQueue=[...desired.values()];this.tileCursor=0;this.committedSpec=spec;this.emptyLeaves=empty;this.failed.clear();this.capacityBlocked=false;this.discoveryError=null;this.discovering=!final;this.localDiscoveryReady=!final;
+  this.wanted=desired;this.readyCount=0;for(const key of desired.keys())if(this.assets.has(key))this.readyCount++;this.committedSpec=spec;this.inventoryEpoch=this.planet.epoch;this.emptyLeaves=empty;for(const key of this.failed.keys())if(!desired.has(key))this.failed.delete(key);this.discoveryError=null;this.discovering=!final;this.localDiscoveryReady=!final;
   // A completed local footprint is evidence even while the global inventory
   // is still being discovered. A later view sector must not erase that proof.
-  const coveredParents=new Map([...this.previewWanted.values()].filter(node=>containsRegion(node,spec)).map(node=>[node.path,node.key]));
+  const coveredParents=new Map(final?[...this.previewWanted.values()].filter(node=>containsRegion(node,spec)).map(node=>[node.path,node.key]):[]);
   for(const parent of wholeParents)if(this.previewWanted.has(parent.key))coveredParents.set(parent.path,parent.key);
   for(const key of coveredParents.values()){this.previewRetirable.add(key);this.previewRemaining.set(key,0);}
   for(const node of desired.values())for(let length=node.path.length-1;length>0;length--){const parent=coveredParents.get(node.path.slice(0,length));if(parent){this.previewForLeaf.set(node.key,parent);if(!this.assets.has(node.key))this.previewRemaining.set(parent,this.previewRemaining.get(parent)+1);break;}}
-  // Finish one nearby parent at a time: scattered HQ leaves cannot replace
-  // the coarse parent until its entire footprint has finished downloading.
-  const priority=node=>(this.previewWanted.get(this.previewForLeaf.get(node.key))??node).center.distanceToSquared(spec.focus);
-  this.tileQueue.sort((a,b)=>priority(a)-priority(b)||a.center.distanceToSquared(spec.focus)-b.center.distanceToSquared(spec.focus));
   const paths=new Map([...desired.values()].map(n=>[n.path,n.key]));
   for(const [key,asset]of this.assets){const samePath=paths.get(asset.descriptor.path);if(asset.expiresAt<=Date.now()||(samePath&&samePath!==key)||(!desired.has(key)&&asset.rootEpoch!==this.planet.epoch))this.unload(key);else if(!desired.has(key)&&!intersectsColumn(asset.descriptor,spec.normal,Math.max(this.retainRadiusMeters,spec.radius)))this.unload(key);else if(desired.has(key))asset.rootEpoch=this.planet.epoch;}
+  this.sortTileQueue(spec);
   for(const [key,remaining]of this.previewRemaining)if(remaining===0&&this.previewRetirable.has(key))this.setPreviewVisible(key,false);
   this.pumpTiles();this.publish();
+ }
+ // The actual 3D gaze includes pitch. Horizontal demand and collision coverage
+ // remain independent: looking up must not discard the ground beneath a player.
+ prioritizeView(position,direction){
+  const previous=this.priorityView;
+  if(previous&&previous.position.distanceToSquared(position)<400&&previous.direction.dot(direction)>Math.cos(Math.PI/30))return;
+  this.priorityView={position:position.clone(),direction:direction.clone().normalize()};
+  if(this.lastSpec){
+   this.sortTileQueue(this.lastSpec);
+   this.previewQueue=[...this.previewWanted.values()].sort((a,b)=>this.comparePriority(a,b,this.lastSpec));this.previewCursor=0;
+  }
+ }
+ priority(node,spec){
+  const gaze=this.priorityView,distance=node.center.distanceToSquared(spec.focus);
+  if(!gaze)return [0,distance];
+  const offset=node.center.clone().sub(gaze.position),range=offset.length();
+  const cosine=range?Math.max(-1,Math.min(1,offset.dot(gaze.direction)/range)):0;
+  const angle=Math.acos(cosine),extent=Math.asin(Math.min(.95,node.radius/Math.max(range,1)));
+  const onScreen=cosine>0&&range>node.radius;
+  const bucket=onScreen&&angle-extent<Math.PI/22?0:onScreen&&angle-extent<Math.PI/3?1:distance<(spec.nearRadius+node.radius)**2?2:3;
+  return [bucket,distance];
+ }
+ comparePriority(a,b,spec){const pa=this.priority(a,spec),pb=this.priority(b,spec);return pa[0]-pb[0]||pa[1]-pb[1];}
+ sortTileQueue(spec){
+  const parents=new Map(),scores=new Map();
+  this.tileQueue=[...this.wanted.values()].filter(node=>!this.assets.has(node.key)&&!this.active.has(node.key)&&!this.failed.has(node.key));
+  for(const node of this.tileQueue){
+   const parent=this.previewWanted.get(this.previewForLeaf.get(node.key))??node;
+   if(!parents.has(parent.key))parents.set(parent.key,this.priority(parent,spec));
+   scores.set(node.key,[...parents.get(parent.key),...this.priority(node,spec)]);
+  }
+  this.tileQueue.sort((a,b)=>{const x=scores.get(a.key),y=scores.get(b.key);return x[0]-y[0]||x[1]-y[1]||x[2]-y[2]||x[3]-y[3];});this.tileCursor=0;
  }
  nextTerminal(){while(this.tileCursor<this.tileQueue?.length){const node=this.tileQueue[this.tileCursor++];if(!this.assets.has(node.key)&&!this.active.has(node.key)&&!this.failed.has(node.key))return node;}return null;}
  nextPreview(){
@@ -204,7 +260,7 @@ export class EarthHQStreaming extends EventDispatcher {
  waitForIdle(timeoutMs=120000){if(this.disposed)return Promise.reject(aborted());return new Promise((resolve,reject)=>{let timer;const check=()=>{if(this.disposed){cleanup();reject(aborted());}else if(!this.discovery&&!this.discovering&&!this.pendingSpec&&this.active.size===0){const result=this.getCoverage();cleanup();resolve(result);}};const cleanup=()=>{clearTimeout(timer);this.removeEventListener('progress',check);};this.addEventListener('progress',check);timer=setTimeout(()=>{cleanup();reject(new TileError('timeout','HQ streaming has not settled',{coverage:this.getCoverage()}));},timeoutMs);check();});}
  regionOptions(){const s=this.lastSpec;return s?{focusECEF:s.focus,radiusMeters:s.radius,viewDirectionECEF:s.viewDirection,viewHalfAngle:s.viewHalfAngle,nearRadiusMeters:s.nearRadius}:{};}
  retryFailed(){this.failed.clear();this.discoveryError=null;if(this.lastSpec)return this.requestRegion(this.regionOptions());return Promise.resolve(this.getCoverage());}
- setGpuBudget(bytes){if(!(bytes>0))throw new TileError('invalid_options','GPU budget must be positive');this.maxGpuBytes=bytes;this.capacityBlocked=false;for(const[key,error]of this.failed)if(error.code==='gpu_budget')this.failed.delete(key);this.tileQueue=[...this.wanted.values()].sort((a,b)=>a.center.distanceToSquared(this.lastSpec.focus)-b.center.distanceToSquared(this.lastSpec.focus));this.tileCursor=0;this.pumpTiles();}
+ setGpuBudget(bytes){if(!(bytes>0))throw new TileError('invalid_options','GPU budget must be positive');this.maxGpuBytes=bytes;this.capacityBlocked=false;for(const[key,error]of this.failed)if(error.code==='gpu_budget')this.failed.delete(key);if(this.lastSpec)this.sortTileQueue(this.lastSpec);this.pumpTiles();}
  setEnabled(enabled){if(this.enabled===!!enabled)return;this.enabled=!!enabled;if(!enabled){this.generation++;this.pendingSpec=null;this.discovering=false;}else if(this.lastSpec&&!this.altitudePaused)this.requestRegion({...this.regionOptions(),waitForCompletion:false}).catch(error=>{if(!isAbort(error))this.dispatchEvent({type:'error',error});});this.publish();}
  async dispose(){
   if(this.disposing)return this.disposing;this.disposed=true;this.generation++;this.pendingSpec=null;this.enabled=false;this.publish();

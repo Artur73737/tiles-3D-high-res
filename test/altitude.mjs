@@ -16,7 +16,7 @@ try{
  report.initial=await page.evaluate(()=>window.__earthDemo.streamer.getCoverage());
  check(report.initial.complete&&report.initial.readyLeaves>0,'Initial low-altitude automatic loading failed');
  check(await page.getByRole('button').allTextContents().then(labels=>labels.every(label=>!/scarica|download/i.test(label))),'Unexpected manual download control');
- await page.getByRole('button',{name:'Globo',exact:true}).click();
+ await page.getByRole('button',{name:'Globe',exact:true}).click();
  await page.waitForFunction(()=>window.__earthDemo.streamer.getCoverage().status==='paused');
  await page.evaluate(()=>window.__earthDemo.streamer.waitForIdle(30000));
  report.orbit=await page.evaluate(()=>window.__earthDemo.streamer.getCoverage());

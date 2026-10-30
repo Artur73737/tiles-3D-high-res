@@ -1,6 +1,6 @@
 # Tiles 3D High Res
 
-A JavaScript streaming engine and browser viewer for satellite imagery and detailed photogrammetric terrain. One bundle contains both the 2D satellite layer and the 3D tile engine, using the same provider. The viewer opens as a globe; selecting **Esplora 3D** starts flight above the selected location and loads nearby geometry automatically.
+A JavaScript streaming engine and browser viewer for satellite imagery and detailed photogrammetric terrain. One bundle contains both the 2D satellite layer and the 3D tile engine, using the same provider. The viewer opens as a globe; selecting **Fly 3D** starts flight above the selected location and loads nearby geometry automatically.
 
 There is no download button. Images refine as you zoom, and 3D terrain streams as you fly. The default 3D viewing distance is **2 km**.
 
@@ -18,7 +18,7 @@ There is no download button. Images refine as you zoom, and 3D terrain streams a
 
 ![Flight over the Colosseum with a two-kilometre streaming area](docs/previews/flight.png)
 
-These are screenshots of the actual viewer. The flight image shows progressive loading, including parent previews; it does not imply that the entire 2 km area has finished loading at terminal resolution. Imagery and geometry retain their providers' copyrights. The viewer interface is currently in Italian.
+These are screenshots of the actual viewer. The flight image shows progressive loading, including parent previews; it does not imply that the entire 2 km area has finished loading at terminal resolution. Imagery and geometry retain their providers' copyrights. The viewer interface is in English.
 
 ## Build and run
 
@@ -45,15 +45,17 @@ Generated artifacts, dependencies, local caches and downloaded fixtures are excl
 
 ## Using the viewer
 
-The globe uses satellite tiles. Drag to rotate with direct 1:1 surface tracking: the grabbed point stays under the pointer, with no acceleration or inertia after release. Use the wheel or the plus/minus buttons to zoom, and change latitude/longitude to inspect another location. **Esplora 3D** enters flight over the point at the centre of the globe view. Double-clicking a point on the globe enters 3D there. The home button returns to the Rome demonstration in 3D.
+The globe uses satellite tiles. Drag to rotate with direct 1:1 surface tracking: the grabbed point stays under the pointer, with no acceleration or inertia after release. Use the wheel or the plus/minus buttons to zoom, or search for a location, city, country or street. Press Enter or the search icon, then select a result to centre the satellite globe. Country and city results use a wider view than street addresses. **Fly 3D** enters flight over the point at the centre of the globe view. Double-clicking a point on the globe enters 3D there. The home button returns to the Rome demonstration in 3D.
 
-In 3D, click the scene to capture the mouse. Escape releases it. The top controls switch modes, open the command guide and collapse the information panel. On small screens the information panel starts collapsed. Flight currently requires a keyboard and mouse; touch movement controls are not implemented.
+In 3D, click the scene to capture the mouse. Escape releases it. The compact top bar holds place search, view modes and the command guide. Streaming details expand inside the bottom status card. On smaller screens the search moves to a second row; status and navigation controls occupy separate areas. Flight currently requires a keyboard and mouse; touch movement controls are not implemented.
 
 | Input | Action |
 | --- | --- |
 | Mouse | Look around while the pointer is captured |
 | W / A / S / D | Move forward / left / backward / right |
 | Double-tap W, holding the second press | Move three times faster until W is released |
+| Wheel forward / backward in flight | Increase / decrease flight speed, from the default 1x up to 16x |
+| Click the speed indicator | Reset flight speed to 1x |
 | Space in flight | Ascend |
 | Shift in flight | Descend |
 | Double-tap Space | Toggle flight and walking |
@@ -61,6 +63,10 @@ In 3D, click the scene to capture the mouse. Escape releases it. The top control
 | G | Return to the satellite globe |
 | R | Reset to the local ground spawn |
 | Escape | Release the pointer |
+
+Flight starts at 8 m/s horizontally. Each wheel step changes the speed multiplier by 25%; scrolling backward stops at the default. The multiplier also applies to ascent/descent and combines with sprint. Collision steps scale with travel distance at higher speeds. In globe mode the wheel still zooms.
+
+Place search uses the [Photon public geocoder](https://github.com/komoot/photon/blob/master/docs/api-v1.md), with OpenStreetMap data. Queries are sent only on submission, not on every keystroke. Search requests time out after 12 seconds; replacing the query or dismissing results cancels the old request. The geocoder is separate from tile delivery: both imagery layers still use the same tile provider. The public search service has no availability guarantee.
 
 The initial flight position is 80 m above a verified local ground surface. Walking and flight collide with the available photogrammetric triangles. Movement waits for local terrain/colliders to be ready. Gaps and inaccuracies in the provider's geometry can affect collisions.
 
@@ -89,7 +95,11 @@ Requests, decoded image ownership, view selection and LRU eviction are managed b
 
 `EarthHQStreaming` reads the Rocktree hierarchy and follows every selected branch to its declared terminal nodes. It does not stop at a hard-coded 3D level or substitute a reduced texture for the final payload. Terrain, buildings and additional layers present in the decoded payload are retained. This is a Rocktree client, not an OGC 3D Tiles implementation.
 
-The active demand follows the surface position and horizontal viewing direction. Near terrain is requested in every direction. Parent meshes provide a surrounding panorama while terminal geometry arrives. Close terminal tiles start loading while distant metadata discovery continues. Downloads finish each nearby parent footprint together so the completed HQ meshes can immediately replace its coarse preview. Payload requests receive priority in bounded bursts, allowing metadata and distant previews to keep making progress. Metadata traversal bounds active branches by the configured concurrency and discards the obsolete traversal frontier when the view changes, rather than waiting for thousands of previously queued requests.
+The active demand follows the surface position and horizontal viewing direction. Scheduling uses the camera's actual 3D gaze, including pitch: the central view receives first priority, then the rest of the view, nearby ground, and surrounding previews. Turning or pitching the camera reprioritizes pending payloads. Already active requests finish within the concurrency limit.
+
+After selecting surrounding previews, the engine discovers and publishes the first gaze-facing parent footprint immediately, then the nearby collision area, then the remaining selected footprints in small batches. Distant metadata no longer gates all visible HQ payloads. Each footprint is examined completely so its coarse parent can retire as soon as its terminal meshes arrive. Final demand may conservatively include edge descendants beyond the nominal sector. Previously examined local collision coverage remains usable during subsequent gaze changes. Initial ground preparation is still required before entering flight, and camera priority starts once the viewer supplies its camera through `update()`.
+
+Payload requests receive priority in bounded bursts, allowing metadata and surrounding previews to keep making progress. Metadata traversal bounds active branches by the configured concurrency and discards the obsolete traversal frontier when the view changes. Queued payload priorities are computed once per sort rather than recomputing vector geometry for every comparator call.
 
 Turning the camera updates demand without discarding already resident geometry inside the retention radius. Completed parent previews are hidden and retained for reuse; they are released under memory pressure or when outside the retained area. This avoids blanking the landscape merely because the camera turned. Retention is bounded, so travel, expiration, capacity pressure or a provider epoch change can still require another download.
 
@@ -240,7 +250,7 @@ The 3D byte cache respects HTTP freshness and uses LRU eviction. IndexedDB failu
 
 3D requests retry transient connection failures, interrupted response bodies, HTTP 408/429 and server errors automatically, with at most three attempts and a 15-second timeout per attempt. Retries remain inside the existing concurrency limit. Missing resources, access-denied responses and byte-budget failures are not retried. Server-directed retry delays are respected; delays longer than the request timeout remain explicit failures.
 
-A failed entry into 3D returns to the usable globe instead of leaving the viewer stuck in loading. After connectivity returns, select **Esplora 3D** again; a failed startup no longer poisons later attempts. Permanent network or browser access restrictions cannot be repaired by retries, and are reported without claiming complete coverage.
+A failed entry into 3D returns to the usable globe instead of leaving the viewer stuck in loading. After connectivity returns, select **Fly 3D** again; a failed startup no longer poisons later attempts. Permanent network or browser access restrictions cannot be repaired by retries, and are reported without claiming complete coverage.
 
 ## Validation
 
@@ -253,6 +263,7 @@ npm run build
 npm run test:browser
 npm run test:demo
 npm run test:viewer
+npm run test:controls
 npm run test:rotation
 npm run test:automatic
 npm run test:altitude
@@ -268,9 +279,22 @@ $env:BROWSER_EXECUTABLE = 'C:/Program Files/Google/Chrome/Application/chrome.exe
 npm run test:viewer
 ```
 
-Source tests cover real captured decoding, terminal traversal, unknown metadata, cache freshness, cancellation, late completion, resource disposal, capacity recovery, altitude gating, request prioritization, local collision inventory, preview retirement, rotation retention and satellite patch geometry. Browser tests require live network access and write ignored reports/screenshots into `test-results/`.
+Source tests cover real captured decoding, terminal traversal, unknown metadata, cache freshness, cancellation, late completion, resource disposal, capacity recovery, altitude gating, gaze and pitch prioritization, progressive inventory publication, wheel speed limits, geocoder response validation, local collision inventory, preview retirement, rotation retention and satellite patch geometry. Browser tests require live network access and write ignored reports/screenshots into `test-results/`.
 
-The network test injects startup, metadata and tile-request failures in Chrome and checks automatic recovery, bounded failure, and a successful second entry into flight. The viewer test checks satellite detail growth, independent layer demand, flight entry and responsive UI. The rotation test checks object identity/retention after turning away and back. The automatic test checks two-kilometre demand, distant previews and camera-following; it intentionally stops before all distant terminal tiles finish. The altitude test checks pause/resume while flying and explicit pause in globe mode. Some headless tests cap rendering at approximately 10 fps to control software-rendering cost; the actual viewer has no such cap.
+The network test injects startup, metadata and tile-request failures in Chrome and checks automatic recovery, bounded failure, and a successful second entry into flight. The viewer test checks satellite detail growth, independent layer demand, flight entry and responsive UI. The controls test checks place search, wheel speed, keyboard selection and compact layouts in Chrome. The rotation test checks object identity/retention after turning away and back. The automatic test checks two-kilometre demand, distant previews and camera-following; it intentionally stops before all distant terminal tiles finish. The altitude test checks pause/resume while flying and explicit pause in globe mode. Some headless tests cap rendering at approximately 10 fps to control software-rendering cost; the actual viewer has no such cap.
+
+Two live Chrome runs on 2026-10-30 entered flight above Rome in 4.6–9.6 s and retired the first central-view parent at terminal detail after 24.9–36.3 s from entry request, with a 2 km demand. In the first run, at that point 957 of 5,577 discovered terminal leaves were ready and discovery was still in progress. This is progressive visibility, not full-area completion. The rotation check retained all 1,670 previously resident leaves after turning away and returning. Layout checks covered 1440x900, 960x600, 390x844 and 844x390 with details open and closed.
+
+A controlled three-parent replay compared this scheduler with commit `b86b72e`, using the same decoded fixture and a 200 ms delay in off-screen metadata. Both versions completed the same three terminal leaves:
+
+| Metadata cache | Version | Central leaf ready | Whole task | CPU time | Peak Node RSS |
+| --- | --- | --- | --- | --- | --- |
+| Cold | Before | 213.6 ms | 214.4 ms | 16 ms | 53.1 MiB |
+| Cold | After | 21.9 ms | 252.3 ms | below timer resolution | 53.4 MiB |
+| Warm | Before | 9.8 ms | 11.3 ms | 15 ms | 53.5 MiB |
+| Warm | After | 5.9 ms | 7.4 ms | below timer resolution | 53.6 MiB |
+
+The replay isolates scheduling order; it does not model remote throughput, browser rendering or full-city memory. CPU timing is coarse on this Windows host, and each process had no children. Decode setup is excluded from elapsed/CPU time but included in peak RSS. Agent token use and full-area live CPU/memory were not measured. Earlier central detail does not imply a faster total cold download.
 
 `test/performance.mjs` provides a Windows Chrome process-family benchmark for a completed 50 m region with cold and warm persistent-cache runs. It records elapsed time, transferred bytes, sampled CPU and memory; shared working sets and unsampled peaks limit those measurements. It does not measure agent tokens. `test/profile.mjs` is a local profiling helper. These tools do not establish a universal loading speed.
 

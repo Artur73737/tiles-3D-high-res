@@ -19,7 +19,7 @@ try{
  check(report.zoomed.satellite.readyZoom>report.orbit.satellite.readyZoom+5,'Zoom did not request more detailed satellite tiles');
  check(report.zoomed.coverage.requiredLeaves===0,'2D imagery is coupled to the 3D engine');
  await page.screenshot({path:root+'/test-results/ui-satellite-close.png'});
- await page.getByRole('button',{name:'Guida ai comandi',exact:true}).click();check(await page.locator('dialog').isVisible(),'Help dialog did not open');await page.getByRole('button',{name:'Ho capito'}).click();
+ await page.getByRole('button',{name:'Controls',exact:true}).click();check(await page.locator('dialog').isVisible(),'Help dialog did not open');await page.getByRole('button',{name:'Got it'}).click();
  await page.setViewportSize({width:390,height:844});await page.waitForTimeout(500);await page.screenshot({path:root+'/test-results/ui-mobile.png'});
  check(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Mobile layout overflows horizontally');
  check((await page.getByRole('button').allTextContents()).every(s=>!/scarica|download/i.test(s)),'Download button present');
