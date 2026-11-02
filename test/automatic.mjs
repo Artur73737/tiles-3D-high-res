@@ -1,31 +1,37 @@
 import {chromium} from 'playwright-core';
-import {writeFileSync,mkdirSync} from 'node:fs';
+import {readFileSync,writeFileSync,mkdirSync} from 'node:fs';
 import {fileURLToPath,pathToFileURL} from 'node:url';
-const root=fileURLToPath(new URL('..',import.meta.url));
+const root=fileURLToPath(new URL('..',import.meta.url));mkdirSync(root+'/test-results',{recursive:true});
 const browser=await chromium.launch({executablePath:process.env.BROWSER_EXECUTABLE??'C:/Program Files/Google/Chrome/Application/chrome.exe',headless:true});
-mkdirSync(root+'/test-results',{recursive:true});
-const page=await browser.newPage({viewport:{width:960,height:600}}),errors=[],report={qaRenderCadence:'10 fps cap for headless software rendering'};
-await page.addInitScript(()=>{const original=window.requestAnimationFrame.bind(window);window.requestAnimationFrame=callback=>original(()=>setTimeout(()=>callback(performance.now()),90));});
-const watchdog=setTimeout(()=>browser.close(),90000);
-page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error')errors.push(m.text());});
-const check=(ok,text)=>{if(!ok)throw Error(text);};
+const page=await browser.newPage({viewport:{width:1280,height:800}}),errors=[],report={created:new Date().toISOString(),qaRenderCadence:'~16 fps cap for headless test only'};
+page.on('pageerror',e=>errors.push(e.message));
+await page.addInitScript(()=>{const raf=requestAnimationFrame.bind(window);window.requestAnimationFrame=cb=>raf(()=>setTimeout(()=>cb(performance.now()),50));});
+const watchdog=setTimeout(()=>browser.close(),150000),check=(ok,message)=>{if(!ok)throw Error(message);};
+const snapshot=()=>page.evaluate(()=>{const q=window.__earthDemo,s=q.streamer,c=s.getCoverage(),depths=[...s.viewCut.values()].map(n=>n.path.length);return {state:q.state(),coverage:c,depths:[...new Set(depths)],maxDepth:Math.max(...depths),terminals:[...s.viewCut.values()].filter(n=>n.leaf).length,workers:s.source.decoder.workers.length,drawCalls:q.renderer.info.render.calls,queue:{active:[...s.active.keys()],remaining:s.tileQueue.length-s.tileCursor,dirty:s.viewQualityDirty,decoder:s.source.decoder.queue.length,workerJobs:s.source.decoder.workers.filter(w=>w.job).length,transport:s.transport.jobs.size,missing:[...s.viewCut.keys()].filter(k=>!s.assets.has(k))}};});
 try{
- const started=Date.now();await page.goto(pathToFileURL(root+'/globo-hq.html').href+'?view=3d#qa');
- await page.waitForFunction(()=>window.__earthDemo?.state().mode==='player',{},{timeout:40000});report.automaticGroundSeconds=(Date.now()-started)/1000;console.log('automatic ground ready in '+report.automaticGroundSeconds+' s');
- check(await page.locator('#go,#enter,#resume,#overlay').count()===0,'Manual rendering gate remains');
- await page.waitForFunction(()=>{const s=window.__earthDemo.streamer;return [...s.previews.values()].some(a=>a.descriptor.center.distanceTo(s.lastSpec.focus)>1500);},{},{timeout:40000});report.distantPreviewSeconds=(Date.now()-started)/1000;
- await page.waitForFunction(()=>{const q=window.__earthDemo;return q.streamer.committedSpec?.radius===2000&&q.streamer.assets.size>500;},{},{timeout:60000});console.log('long-range metadata committed');
- // Observe actual progressive network rendering, without requiring every remote
- // tile to download as a prerequisite for a useful local scene.
- await page.waitForFunction(()=>{const q=window.__earthDemo,s=q.streamer;return [...s.assets.values()].some(a=>a.descriptor.center.distanceTo(s.committedSpec.focus)>120);},{},{timeout:40000});
- report.before=await page.evaluate(()=>{const q=window.__earthDemo,s=q.streamer;let maxResidentDistance=0,farthestRequired=0;for(const a of s.assets.values())maxResidentDistance=Math.max(maxResidentDistance,a.descriptor.center.distanceTo(s.committedSpec.focus));for(const n of s.wanted.values())farthestRequired=Math.max(farthestRequired,n.center.distanceTo(s.committedSpec.focus));return {state:q.state(),fog:q.scene.fog,coverage:s.getCoverage(),maxResidentDistance,farthestRequired};});
- check(report.before.state.visibility===2000&&report.before.fog===null,'Long visibility / fog configuration wrong');check(report.before.farthestRequired>1900,'Demand did not reach long-range terminal tiles');
- await page.evaluate(()=>{const q=window.__earthDemo;q.player.place(new q.THREE.Vector3(0,110,0));q.player.flying=true;q.look(0,-.25);});await page.waitForTimeout(700);await page.screenshot({path:root+'/test-results/automatic-wide.png'});
- const direction=await page.evaluate(()=>window.__earthDemo.streamer.lastSpec.viewDirection.toArray());
- await page.evaluate(()=>window.__earthDemo.look(Math.PI,-.25));await page.waitForFunction(old=>{const v=window.__earthDemo.streamer.lastSpec.viewDirection;return v&&v.x*old[0]+v.y*old[1]+v.z*old[2]<-.9;},direction);
- report.rotationFollowed=true;
- const oldFocus=await page.evaluate(()=>window.__earthDemo.streamer.lastSpec.focus.toArray());
- await page.evaluate(()=>{const q=window.__earthDemo;q.player.place(new q.THREE.Vector3(45,110,0));q.player.flying=true;});await page.waitForFunction(old=>window.__earthDemo.streamer.lastSpec.focus.distanceTo(new window.__earthDemo.THREE.Vector3(...old))>30,oldFocus);report.positionFollowed=true;
- report.errors=errors;check(!errors.length,'Browser errors: '+errors.join('; '));report.ok=true;report.elapsedSeconds=(Date.now()-started)/1000;
-}catch(e){report.ok=false;report.error=e.message;report.errors=errors;process.exitCode=1;}
-finally{clearTimeout(watchdog);await browser.close();writeFileSync(root+'/test-results/automatic.json',JSON.stringify(report,null,2));console.log(JSON.stringify(report));}
+ const start=Date.now();await page.goto(pathToFileURL(root+'/globo-hq.html').href+'?view=3d#qa');
+ await page.waitForFunction(()=>window.__earthDemo?.state().mode==='player',{},{timeout:45000});report.entrySeconds=(Date.now()-start)/1000;
+ await page.waitForFunction(()=>{const s=window.__earthDemo.streamer;return s.viewCut&&s.getCoverage().complete;},{},{timeout:60000});report.viewSeconds=(Date.now()-start)/1000;report.wide=await snapshot();
+ check(report.wide.workers>0&&report.wide.coverage.radiusMeters===2000,'Worker-backed two-kilometre view not active');
+ check(report.wide.depths.length>1,'View does not select mixed depths');
+ await page.screenshot({path:root+'/test-results/view-wide.png'});
+ const beforeTurn=await page.evaluate(()=>{const q=window.__earthDemo;window.__kept=new Map(q.streamer.assets);const before={size:window.__kept.size,generation:q.streamer.generation,direction:q.streamer.lastSpec.viewDirection.toArray()};q.look(Math.PI,-.18);return before;});
+ await page.waitForFunction(before=>{const q=window.__earthDemo,s=q.streamer;return s.generation>before.generation&&s.committedSpec.viewDirection?.dot(new q.THREE.Vector3(...before.direction))<-.9&&!s.discovering&&s.viewCut&&s.getCoverage().complete;},beforeTurn,{timeout:45000});
+ report.turned=await snapshot();report.retained=await page.evaluate(()=>[...window.__kept].filter(([key,asset])=>window.__earthDemo.streamer.assets.get(key)===asset&&!asset.disposed).length);check(report.retained===beforeTurn.size,'Turning evicted resident tiles');
+ const oldGeneration=await page.evaluate(()=>window.__earthDemo.streamer.generation);
+ await page.evaluate(()=>{const q=window.__earthDemo;q.player.place(q.player.spawn.clone().add(new q.THREE.Vector3(0,2,0)));q.player.flying=true;q.look(0,-.18);});
+ await page.waitForFunction(old=>{const s=window.__earthDemo.streamer;return s.generation>old&&s.getCoverage().complete;},oldGeneration,{timeout:45000});
+ report.ground=await snapshot();check(report.ground.maxDepth>=report.wide.maxDepth&&report.ground.terminals>0,'Low altitude failed to reach terminal geometry');
+ await page.screenshot({path:root+'/test-results/view-ground.png'});
+ const generation=await page.evaluate(()=>{const q=window.__earthDemo;q.player.place(q.player.spawn.clone().add(new q.THREE.Vector3(0,150,0)));q.player.flying=true;q.player.flightMultiplier=16;q.look(0,-.18);return q.streamer.generation;});
+ await page.waitForFunction(old=>{const s=window.__earthDemo.streamer;return s.generation>old&&s.getCoverage().complete;},generation,{timeout:45000});
+ const beforeMove=await page.evaluate(()=>window.__earthDemo.player.feet.toArray());
+ await page.mouse.click(640,400);await page.waitForFunction(()=>window.__earthDemo.state().locked);
+ await page.keyboard.press('KeyW');await page.keyboard.down('KeyW');await page.waitForTimeout(1500);await page.keyboard.up('KeyW');
+ report.fastFlight=await page.evaluate(before=>{const q=window.__earthDemo;document.exitPointerLock();return {metres:q.player.feet.distanceTo(new q.THREE.Vector3(...before)),coverage:q.streamer.getCoverage()};},beforeMove);
+ check(report.fastFlight.metres>20,'Fast flight could not advance through the examined view');
+ await page.evaluate(()=>window.__earthDemo.streamer.dispose());
+ check(await page.evaluate(()=>window.__earthDemo.streamer.source.decoder.workers.length===0),'Decoder workers survived disposal');
+ check(!errors.length,'Page errors: '+errors.join('; '));report.ok=true;
+}catch(error){report.ok=false;report.error=error.message;process.exitCode=1;try{report.failure=await snapshot();await page.screenshot({path:root+'/test-results/view-failure.png'});}catch{}}
+finally{clearTimeout(watchdog);await browser.close();report.errors=errors;writeFileSync(root+'/test-results/view-streaming.json',JSON.stringify(report,null,2));console.log(JSON.stringify(report));}

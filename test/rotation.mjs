@@ -9,7 +9,7 @@ await page.addInitScript(()=>{const raf=requestAnimationFrame.bind(window);windo
 const watchdog=setTimeout(()=>browser.close(),90000),check=(ok,message)=>{if(!ok)throw Error(message);};
 try{
  await page.goto(pathToFileURL(root+'/globo-hq.html').href+'?view=3d&visibility=300#qa');
- await page.waitForFunction(()=>{const q=window.__earthDemo;return q?.state().mode==='player'&&q.streamer.committedSpec?.radius===300&&!q.streamer.discovering&&q.streamer.assets.size>=450;},{},{timeout:45000});
+ await page.waitForFunction(()=>{const q=window.__earthDemo;return q?.state().mode==='player'&&q.streamer.committedSpec?.radius===300&&!q.streamer.discovering&&q.streamer.getCoverage().complete;},{},{timeout:45000});
  report.before=await page.evaluate(()=>{const q=window.__earthDemo,s=q.streamer;window.__rotationAssets=new Map(s.assets);return {coverage:s.getCoverage(),direction:s.lastSpec.viewDirection.toArray()};});
  await page.screenshot({path:root+'/test-results/ui-ground.png'});
  await page.evaluate(()=>window.__earthDemo.look(Math.PI));
