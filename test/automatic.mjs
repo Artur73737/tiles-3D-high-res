@@ -15,15 +15,16 @@ try{
  check(report.wide.workers>0&&report.wide.coverage.radiusMeters===2000,'Worker-backed two-kilometre view not active');
  check(report.wide.depths.length>1,'View does not select mixed depths');
  await page.screenshot({path:root+'/test-results/view-wide.png'});
+ await page.locator('#settings-toggle').click();await page.locator('#tab-picture').click();await page.screenshot({path:root+'/test-results/view-settings.png'});await page.locator('#settings-close').click();
  const beforeTurn=await page.evaluate(()=>{const q=window.__earthDemo;window.__kept=new Map(q.streamer.assets);const before={size:window.__kept.size,generation:q.streamer.generation,direction:q.streamer.lastSpec.viewDirection.toArray()};q.look(Math.PI,-.18);return before;});
  await page.waitForFunction(before=>{const q=window.__earthDemo,s=q.streamer;return s.generation>before.generation&&s.committedSpec.viewDirection?.dot(new q.THREE.Vector3(...before.direction))<-.9&&!s.discovering&&s.viewCut&&s.getCoverage().complete;},beforeTurn,{timeout:45000});
  report.turned=await snapshot();report.retained=await page.evaluate(()=>[...window.__kept].filter(([key,asset])=>window.__earthDemo.streamer.assets.get(key)===asset&&!asset.disposed).length);check(report.retained===beforeTurn.size,'Turning evicted resident tiles');
  const oldGeneration=await page.evaluate(()=>window.__earthDemo.streamer.generation);
- await page.evaluate(()=>{const q=window.__earthDemo;q.player.place(q.player.spawn.clone().add(new q.THREE.Vector3(0,2,0)));q.player.flying=true;q.look(0,-.18);});
+ await page.evaluate(()=>{const q=window.__earthDemo;q.player.place(new q.THREE.Vector3(0,29.3,0));q.player.flying=true;q.look(0,-.18);});
  await page.waitForFunction(old=>{const s=window.__earthDemo.streamer;return s.generation>old&&s.getCoverage().complete;},oldGeneration,{timeout:45000});
  report.ground=await snapshot();check(report.ground.maxDepth>=report.wide.maxDepth&&report.ground.terminals>0,'Low altitude failed to reach terminal geometry');
  await page.screenshot({path:root+'/test-results/view-ground.png'});
- const generation=await page.evaluate(()=>{const q=window.__earthDemo;q.player.place(q.player.spawn.clone().add(new q.THREE.Vector3(0,150,0)));q.player.flying=true;q.player.flightMultiplier=16;q.look(0,-.18);return q.streamer.generation;});
+ const generation=await page.evaluate(()=>{const q=window.__earthDemo;q.player.place(new q.THREE.Vector3(0,178,0));q.player.flying=true;q.player.flightMultiplier=16;q.look(0,-.18);return q.streamer.generation;});
  await page.waitForFunction(old=>{const s=window.__earthDemo.streamer;return s.generation>old&&s.getCoverage().complete;},generation,{timeout:45000});
  const beforeMove=await page.evaluate(()=>window.__earthDemo.player.feet.toArray());
  await page.mouse.click(640,400);await page.waitForFunction(()=>window.__earthDemo.state().locked);

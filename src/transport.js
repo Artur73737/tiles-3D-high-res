@@ -1,9 +1,13 @@
 import {TileError,aborted} from './errors.js';
 import {cacheLifetime} from './cache.js';
+export function compareRequestPriority(a,b){
+ const x=Array.isArray(a)?a:[0,a],y=Array.isArray(b)?b:[0,b];
+ for(let i=0;i<Math.max(x.length,y.length);i++)if((x[i]??0)!==(y[i]??0))return (y[i]??0)-(x[i]??0);return 0;
+}
 export class ByteTransport {
  constructor({cache,fetch:fetcher=globalThis.fetch.bind(globalThis),concurrency=6,maxResponseBytes=64*1024*1024,retries=2,retryDelayMs=300,timeoutMs=15000}={}){
   if(!Number.isInteger(retries)||retries<0||!Number.isFinite(retryDelayMs)||retryDelayMs<0||!Number.isFinite(timeoutMs)||timeoutMs<=0)throw new TileError('invalid_options','Invalid network retry options');
-  this.cache=cache;this.fetch=fetcher;this.concurrency=concurrency;this.maxResponseBytes=maxResponseBytes;this.retries=retries;this.retryDelayMs=retryDelayMs;this.timeoutMs=timeoutMs;this.queue=[];this.priorityBurst=0;this.running=0;this.jobs=new Map();this.expiry=new Map();this.controller=new AbortController();this.disposed=false;this.stats={networkRequests:0,memoryHits:0,diskHits:0,receivedBytes:0};
+  this.cache=cache;this.fetch=fetcher;this.concurrency=concurrency;this.maxResponseBytes=maxResponseBytes;this.retries=retries;this.retryDelayMs=retryDelayMs;this.timeoutMs=timeoutMs;this.queue=[];this.running=0;this.jobs=new Map();this.expiry=new Map();this.controller=new AbortController();this.disposed=false;this.stats={networkRequests:0,memoryHits:0,diskHits:0,receivedBytes:0};
  }
  rememberExpiry(url,time){this.expiry.delete(url);this.expiry.set(url,time);while(this.expiry.size>4096)this.expiry.delete(this.expiry.keys().next().value);}
  getExpiry(url){return this.expiry.get(url)??null;}
@@ -13,10 +17,10 @@ export class ByteTransport {
   const promise=(async()=>{
    if(!fresh){const cached=await this.cache.get(url);if(cached){if(this.disposed)throw aborted();this.rememberExpiry(url,cached.expiresAt);this.stats[cached.cacheTier==='disk'?'diskHits':'memoryHits']++;return cached.bytes;}}
    if(this.disposed)throw aborted();
-   return new Promise((resolve,reject)=>{const task={url,resolve,reject,priority},index=this.queue.findIndex(queued=>queued.priority<priority);if(index<0)this.queue.push(task);else this.queue.splice(index,0,task);this.pump();});
+   return new Promise((resolve,reject)=>{const task={url,resolve,reject,priority},index=this.queue.findIndex(queued=>compareRequestPriority(queued.priority,priority)>0);if(index<0)this.queue.push(task);else this.queue.splice(index,0,task);this.pump();});
   })().finally(()=>this.jobs.delete(url));this.jobs.set(url,promise);return promise;
  }
- pump(){while(!this.disposed&&this.running<this.concurrency&&this.queue.length){const lower=this.priorityBurst>=4?this.queue.findIndex(job=>job.priority<this.queue[0].priority):-1;const task=lower>=0?this.queue.splice(lower,1)[0]:this.queue.shift();this.priorityBurst=task.priority>0?Math.min(4,this.priorityBurst+1):0;this.running++;this.download(task.url).then(task.resolve,task.reject).finally(()=>{this.running--;this.pump();});}}
+ pump(){while(!this.disposed&&this.running<this.concurrency&&this.queue.length){const task=this.queue.shift();this.running++;this.download(task.url).then(task.resolve,task.reject).finally(()=>{this.running--;this.pump();});}}
  async download(url){
   let result;
   for(let attempt=0;;attempt++){

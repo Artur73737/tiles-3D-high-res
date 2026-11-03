@@ -5,7 +5,7 @@ import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 const root=fileURLToPath(new URL('..',import.meta.url)),label=process.argv[2]??'current';
-const html=process.argv[3]??root+'/globo-hq.html',radiusMeters=Number(process.argv[4]??50),observeSeconds=Number(process.argv[5]??0);
+const html=process.argv[3]??root+'/globo-hq.html',radiusMeters=Number(process.argv[4]??50),observeSeconds=Number(process.argv[5]??0),cameraAltitude=Number(process.argv[6]??0);
 if(!Number.isFinite(radiusMeters)||radiusMeters<=0||!Number.isFinite(observeSeconds)||observeSeconds<0||observeSeconds>30)throw Error('Invalid benchmark radius or observation interval');
 const execute=promisify(execFile),report={label,htmlSha256:createHash('sha256').update(readFileSync(html)).digest('hex'),created:new Date().toISOString(),radiusMeters,observeSeconds,renderCadence:'10 fps headless',agentTokens:'not measured',runs:[]};
 mkdirSync(root+'/test-results',{recursive:true});
@@ -28,13 +28,14 @@ try{
   const sampling=(async()=>{while(!finished){await new Promise(r=>setTimeout(r,1200));if(finished)break;try{const s=await sample();peak={workingSet:Math.max(peak.workingSet,s.workingSet),privateBytes:Math.max(peak.privateBytes,s.privateBytes)};}catch(e){sampleError=e.message;}}})();
   try{
    await page.waitForFunction(()=>window.__earthDemo?.state().mode==='player',{},{timeout:60000});
-   const groundSeconds=(performance.now()-start)/1000;
+   const entrySeconds=(performance.now()-start)/1000;
+   if(cameraAltitude)await page.evaluate(height=>{const q=window.__earthDemo;q.player.place(new q.THREE.Vector3(0,height-1.63,0));q.player.flying=true;q.look(0,-.18);},cameraAltitude);
    if(observeSeconds)await page.waitForTimeout(observeSeconds*1000);else await page.evaluate(()=>window.__earthDemo.streamer.waitForIdle(60000));
    const observationSeconds=(performance.now()-start)/1000,completeSeconds=observeSeconds?null:observationSeconds;
-   const result=await page.evaluate(()=>{const q=window.__earthDemo;return {coverage:q.streamer.getCoverage(),keys:[...q.streamer.wanted.keys()].sort(),drawCalls:q.renderer.info.render.calls};});
+   const result=await page.evaluate(()=>{const q=window.__earthDemo;return {coverage:q.streamer.getCoverage(),camera:q.camera.position.toArray(),keys:[...q.streamer.wanted.keys()].sort(),drawCalls:q.renderer.info.render.calls};});
    if((!observeSeconds&&!result.coverage.complete)||!result.coverage.readyLeaves)throw Error('Incomplete representative task');
    const after=await sample(),metrics=await cdp.send('Performance.getMetrics');
-   report.runs.push({temperature,groundSeconds,completeSeconds,observationSeconds,coverage:result.coverage,demandKeysSha256:createHash('sha256').update(result.keys.join('\n')).digest('hex'),drawCalls:result.drawCalls,cpuSeconds:after.cpuSeconds-before.cpuSeconds,peakSampledWorkingSet:Math.max(peak.workingSet,after.workingSet),peakSampledPrivateBytes:Math.max(peak.privateBytes,after.privateBytes),sampleError,rendererMetrics:Object.fromEntries(metrics.metrics.filter(m=>['TaskDuration','JSHeapUsedSize'].includes(m.name)).map(m=>[m.name,m.value]))});
+   report.runs.push({temperature,entrySeconds,cameraAltitude,camera:result.camera,completeSeconds,observationSeconds,coverage:result.coverage,demandKeysSha256:createHash('sha256').update(result.keys.join('\n')).digest('hex'),drawCalls:result.drawCalls,cpuSeconds:after.cpuSeconds-before.cpuSeconds,peakSampledWorkingSet:Math.max(peak.workingSet,after.workingSet),peakSampledPrivateBytes:Math.max(peak.privateBytes,after.privateBytes),sampleError,rendererMetrics:Object.fromEntries(metrics.metrics.filter(m=>['TaskDuration','JSHeapUsedSize'].includes(m.name)).map(m=>[m.name,m.value]))});
    console.log(JSON.stringify(report.runs.at(-1)));
   }finally{finished=true;await sampling;}
  }

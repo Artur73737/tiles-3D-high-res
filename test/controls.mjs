@@ -24,30 +24,24 @@ try{
  await page.screenshot({path:root+'/test-results/controls-satellite.png'});
  for(const [width,height]of [[1440,900],[960,600],[390,844],[844,390]]){
   await page.setViewportSize({width,height});
-  for(const details of [false,true]){
-   if(await page.locator('#panel-toggle').getAttribute('aria-expanded')!==String(details))await page.locator('#panel-toggle').click();
+  for(const settings of [false,true]){
+   if(await page.locator('#settings-toggle').getAttribute('aria-expanded')!==String(settings))await page.locator('#settings-toggle').click();
    const layout=await page.evaluate(()=>{
-    const boxes=['.topbar','.navigation','.bottom'].map(selector=>{const r=document.querySelector(selector).getBoundingClientRect();return {selector,x:r.x,y:r.y,right:r.right,bottom:r.bottom};});
-    const overlaps=[];for(let i=0;i<boxes.length;i++)for(let j=i+1;j<boxes.length;j++){const a=boxes[i],b=boxes[j];if(a.x<b.right&&a.right>b.x&&a.y<b.bottom&&a.bottom>b.y)overlaps.push([a.selector,b.selector]);}
-    return {boxes,overlaps,overflow:document.documentElement.scrollWidth>innerWidth||boxes.some(b=>b.x<0||b.y<0||b.right>innerWidth||b.bottom>innerHeight)};
-   });report.layouts.push({width,height,details,...layout});check(!layout.overflow&&!layout.overlaps.length,'UI overlap or overflow at '+width+'x'+height+' details='+details);
+    const boxes=['.topbar','#location-search','.navigation','#settings-panel'].map(selector=>({selector,element:document.querySelector(selector)})).filter(({element})=>!element.hidden&&getComputedStyle(element).visibility!=='hidden').map(({selector,element})=>{const r=element.getBoundingClientRect();return {selector,x:r.x,y:r.y,right:r.right,bottom:r.bottom,area:r.width*r.height};}),overlaps=[];
+    for(let i=0;i<boxes.length;i++)for(let j=i+1;j<boxes.length;j++){const a=boxes[i],b=boxes[j];if(a.x<b.right&&a.right>b.x&&a.y<b.bottom&&a.bottom>b.y)overlaps.push([a.selector,b.selector]);}
+    return {boxes,overlaps,occupied:boxes.reduce((sum,b)=>sum+b.area,0)/(innerWidth*innerHeight),dark:getComputedStyle(document.documentElement).colorScheme==='dark',overflow:boxes.some(b=>b.x<0||b.y<0||b.right>innerWidth||b.bottom>innerHeight)};
+   });report.layouts.push({width,height,settings,...layout});check(layout.dark&&!layout.overflow&&!layout.overlaps.length,'UI overlap or theme regression at '+width+'x'+height);if(!settings)check(layout.occupied<.08,'Closed UI occupies more than 8% of the viewport');
   }
+  await page.locator('#settings-close').click();
  }
- await page.locator('#panel-toggle').click();
- for(const [width,height]of [[1440,900],[960,600],[390,844],[844,390]]){
-  await page.setViewportSize({width,height});await page.locator('#settings-toggle').click();
-  const layout=await page.evaluate(()=>{const selectors=['.topbar','.navigation','.bottom','#settings-panel'],boxes=selectors.map(selector=>({selector,element:document.querySelector(selector)})).filter(({element})=>getComputedStyle(element).visibility!=='hidden'&&!element.hidden).map(({selector,element})=>{const r=element.getBoundingClientRect();return {selector,x:r.x,y:r.y,right:r.right,bottom:r.bottom};}),overlaps=[];for(let i=0;i<boxes.length;i++)for(let j=i+1;j<boxes.length;j++){const a=boxes[i],b=boxes[j];if(a.x<b.right&&a.right>b.x&&a.y<b.bottom&&a.bottom>b.y)overlaps.push([a.selector,b.selector]);}return {boxes,overlaps,overflow:boxes.some(b=>b.x<0||b.y<0||b.right>innerWidth||b.bottom>innerHeight)};});
-  report.layouts.push({width,height,settings:true,...layout});check(!layout.overflow&&!layout.overlaps.length,'Settings overlap at '+width+'x'+height);await page.locator('#settings-close').click();
- }
- await page.setViewportSize({width:1440,height:900});await page.locator('#settings-toggle').click();
- await page.locator('#view-distance').selectOption('5000');await page.locator('#detail-level').selectOption('.5');await page.locator('#render-scale').selectOption('1.5');
- await page.locator('#field-of-view').fill('70');await page.locator('#field-of-view').dispatchEvent('input');
- await page.locator('#satellite-visible').uncheck();await page.locator('#invert-look').check();await page.locator('#show-crosshair').uncheck();
+ await page.setViewportSize({width:1280,height:800});await page.locator('#settings-toggle').click();await page.locator('#tab-picture').click();
+ await page.locator('#view-distance').selectOption('5000');await page.locator('#detail-level').selectOption('.5');await page.locator('#render-scale').selectOption('1.5');await page.locator('#satellite-visible').uncheck();
+ await page.locator('#tab-move').click();await page.locator('#field-of-view').fill('70');await page.locator('#field-of-view').dispatchEvent('input');
+ await page.locator('#tab-input').click();await page.locator('#invert-look').check();await page.locator('#show-crosshair').uncheck();
  report.settings=await page.evaluate(()=>{const q=window.__earthDemo;return {distance:q.state().visibility,detail:q.streamer.screenSpaceError,pixels:q.renderer.getPixelRatio(),fov:q.camera.fov,satellite:q.satellite.group.visible,crosshair:document.getElementById('crosshair').hidden};});
  check(report.settings.distance===5000&&report.settings.detail===.5&&report.settings.pixels===1.5&&report.settings.fov===70&&!report.settings.satellite&&report.settings.crosshair,'Settings did not update the renderer');
- await page.locator('#reset-settings').click();check(await page.evaluate(()=>window.__earthDemo.state().visibility===2000&&window.__earthDemo.camera.fov===52&&window.__earthDemo.satellite.group.visible),'Reset settings failed');
+ await page.locator('#tab-stream').click();await page.locator('#reset-settings').click();check(await page.evaluate(()=>window.__earthDemo.state().visibility===2000&&window.__earthDemo.camera.fov===52&&window.__earthDemo.satellite.group.visible),'Reset settings failed');
  await page.locator('#settings-close').click();
-
  // Controlled service failures exercise the same file-origin browser UI.
  await page.route('https://photon.komoot.io/api/**',route=>route.fulfill({status:503,contentType:'application/json',headers:{'access-control-allow-origin':'*'},body:'{}'}));
  await page.locator('#location').fill('unavailable');await page.locator('#location').press('Enter');
@@ -67,12 +61,12 @@ try{
  report.gazeRefinedSeconds=(Date.now()-start)/1000;
  report.coverage=await page.evaluate(()=>window.__earthDemo.streamer.getCoverage());
  await page.screenshot({path:root+'/test-results/controls-flight.png'});
- await page.locator('#settings-toggle').click();await page.locator('#flight-speed').fill('4');await page.locator('#flight-speed').dispatchEvent('input');
+ await page.locator('#settings-toggle').click();await page.locator('#tab-move').click();await page.locator('#flight-speed').fill('4');await page.locator('#flight-speed').dispatchEvent('input');
  check(await page.evaluate(()=>window.__earthDemo.player.flightMultiplier===4),'Speed control failed');
- await page.locator('#movement-walk').click();check(await page.evaluate(()=>!window.__earthDemo.player.flying),'Walk control failed');await page.locator('#movement-fly').click();
+ await page.locator('#movement-walk').click();await page.waitForFunction(()=>!window.__earthDemo.player.flying,{},{timeout:30000});await page.locator('#movement-fly').click();await page.locator('#tab-stream').click();
  await page.locator('#stream-pause').click();check(await page.evaluate(()=>!window.__earthDemo.streamer.enabled),'Pause control failed');
  await page.locator('#stream-pause').click();check(await page.evaluate(()=>window.__earthDemo.streamer.enabled),'Resume control failed');
- await page.locator('.settings-body').evaluate(element=>element.scrollTop=0);
+ await page.locator('#tab-picture').click();await page.locator('.settings-body').evaluate(element=>element.scrollTop=0);
  await page.screenshot({path:root+'/test-results/controls-settings.png'});
  await page.locator('#settings-close').click();
  check(!errors.length,errors.join('; '));report.ok=true;

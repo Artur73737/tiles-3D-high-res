@@ -25,7 +25,7 @@ const lat=41.88931,lon=12.49223,target=geoToECEF(lat,lon),up=target.clone().norm
 const east=new THREE.Vector3(-Math.sin(lon*Math.PI/180),Math.cos(lon*Math.PI/180),0);
 camera.position.copy(target).addScaledVector(up,100).addScaledVector(east,70);
 camera.up.copy(up);camera.lookAt(target);
-const tiles=new EarthHQStreaming({renderer,radiusMeters:100,retainRadiusMeters:200,previewRadiusMeters:120});
+const tiles=new EarthHQStreaming({renderer,radiusMeters:100,retainRadiusMeters:200,screenSpaceError:1});
 const satellite=new SatelliteLayer({renderer});scene.add(tiles.group,satellite.group);
 const status=document.getElementById('status'),credits=document.getElementById('credits');
 tiles.addEventListener('progress',({coverage:c})=>{

@@ -127,3 +127,75 @@ These operations resolve the previously unknown angular formula and active globa
 - normalized-geographic-transform.txt: 1921 bytes; SHA-256 cad14f1e243b9eabbd5c18a6e2f73ec19887d8776cd0c64667b820c25aaab24b
 
 - rockmesh-constructor.txt: 23455 bytes; SHA-256 50b75db2d923fe5c406867ff55d2cac7c726a98d14290e424b994d829d7c66ca
+
+
+## Payload admission, resident staging and request records
+
+Further source analysis separates spatial classification, traversal admission, request touch and rendering. Func6024 (0x29fb78–0x29fced) classifies node bounds against up to six clip volumes, returning0/1/2. It is not a cache or payload-availability check.
+
+The outer RockTraverser walker is func8627, body4085865–4087319 (rock-node-walker.txt). It calls per-node13098 before node initialization (0x3e59ee–0x3e59fc and0x3e5b81–0x3e5b8f), pushes a child traversal frame only when13098 returns true, and calls finalize13097 after descendants (0x3e5d92–0x3e5d99 /0x3e5dbc–0x3e5dc2). An admitted stop node still finalizes:13098 writes an independent admission output flag; rejection writes false at0x6d3a8a–0x6d3a8f.
+
+For cold, non-fading state, admission is score>=lower (with shallow bootstrap), while continuation is score>upper (with shallow bootstrap). Below-lower children are rejected; they do not replace their parent's footprint. Consequently, a parent above upper can remain the visible fallback for child octants whose scores are already below lower. Queuing every visited child before calculating score violates this admission rule. Above-lower ancestors are admitted too; this does not establish a policy requesting only terminal nodes.
+
+There is also a resident-parent gate on continuation. At0x6d3a43–0x6d3a87, continuation bypasses the gate for traverser6448=2/3, no parent frame, no parent node, or parent.node679!=1; otherwise it requires parentFrame[4]!=0. Func6344 (0x2b9a34–0x2b9a59) returns node948, the current resident mesh pointer, only when node679==1. Func13110 at0x6d5fc6–0x6d5fce sets679=!(metadata.flags&8), with later mode-specific suppression possible. The gate tests the immediate parent, not the current node: the current node is admitted/request-touched even if it cannot continue. Hence two data-bearing generations can be touched concurrently, then deeper traversal waits for resident ancestors. This is not a rule requiring each current node's own payload before considering its children. Network response arrival alone does not establish mesh residency, and this analysis does not independently prove every texture/GPU readiness condition.
+
+The additional passive live capture live-fade-settings.json observed view mode3208=2 with6448=1 and mode3208=1 with6448=3; both were active in the same tilted view. These numeric mappings are observed. Assigning photogrammetry/imagery semantic names to these two traversers is an inference, not established by their numeric fields alone. The owned browser exited after the read.
+
+Finalize13097 calls request-touch13112 at0x6d2e4a–0x6d2e50. Func13112 constructs a context containing node pointer, node traversal state, float100, traversal6448 and a time/tag, and forwards metadata resource684 via PlanetFetcher vfunc40 and mesh resources692/728/736/744/752 via vfunc36. The receiver's RTTI identifies PlanetFetcher (3951804), reached from IFetcher by dynamic_cast in8627. Main vtable at file0x149e5d9 maps vfunc40 to13139 and36 to13140.
+
+- Metadata touch13139,0x6dd919–0x6dd940, suppresses when context mode!=0, state exists, and either spatial state16==1 or score28< -0.2.
+- Payload touch13140,0x6dda49–0x6dda70, applies the same spatial suppression but its score cutoff is negative largest finitefloat, so ordinary admitted payloads are not rejected by this second score test.
+- Both construct records with6332 and append through3979. Func6332 at0x2b8987–0x2b899e copies the traversal score into record.f32[12]; it also preserves explicit request priority record.f32[24], mode/tag record.i32[28] and flags20/21. There is no gaze-cone bucket calculation in this record constructor.
+- Func33057 sorts/drains queued categories through10706/10705/10704/4685. Comparator branches in10706 at0x4f8f04–0x4f8f79 compare tag28, request priority24, flag20, score12, flag21. Full final dispatch/cancellation/concurrency semantics are not yet reconstructed; these comparisons alone do not prove network dispatch order.
+
+## Postorder octant masks
+
+Before descendants, walker8627 at0x3e5a94–0x3e5ab4 initializes state48=state49=(residentMesh?mesh.byte788:255) and state50=state51=0. Func30206 writes spatial classification16 and zeros mask48 if classification==1.
+
+Finalize13097 updates the immediate parent's octant only when current.state32 is admitted and a parent traversal state exists. A resident current mesh produces state code2. Without a current mesh it uses child coverage8318, converts partial1 to0, and propagates full2; a node with neither data nor terminal flag skips propagation. Func8317,0x3ae596–0x3ae5ec, sets parent's bit51/clears50 for code1, and sets50/clears51 for code2. Code0 leaves them unchanged. Func8318,0x3ae5ed–0x3ae625, returns2 if every mask48 bit is in50,1 if any mask48 bit is in51 or only some in50, and0 otherwise.
+
+The ordinary remaining draw mask is state48 & state49 & ~(state50|state51), used at0x6d2e57–0x6d2e76 and by traversal-state virtual getters. Rejected below-lower children do not finalize or clear their parent octant. Loaded child meshes replace only their own octant. Partial descendants without a resident intermediate mesh do not prove full ancestor-octant coverage.
+
+## Fade dependency continuation and alpha
+
+The prior description of a last-visited frame needs refinement: it is a fade dependency timestamp, not ordinary metadata visitation and not a permanent refined-path set. Func13110 at0x6d5cf0–0x6d5d21 constructs an embedded TimeFadeUnpopState at node840 (=traversalState64), vtable8567020. Its frame field96 is initialized -1 by node936 store at0x6d5da1–0x6d5da5. Getter8485 (0x3d5c83) reads96; setter30321 (0xaed14e) writes96. Those are vfunc56 and52 respectively.
+
+Finalize13097 calls TimeFadeUnpopState30319 with current unpop state, frame, parent IUnpoppable when remaining child mask permits it, current IUnpoppable and current time. In30319,0xaed0ea–0xaed107 marks the **parent argument's** unpop state with current frame after the intermediate paired blending path. Alpha0/1 branches exit earlier (0xaecdfb /0xaece2f), as do absent/incompatible parent and immediate-selection paths. The node's last-frame continuation at0x6d385b–0x6d3874 therefore keeps parents needed for an active child's transition. Marking every visited/refined node, or every rendered partial parent, as recently used can keep traversal permanently over-refined.
+
+Pair prerequisites in30319: current IUnpoppable.vfunc0 reports a resident selected resource; a parent exists; parent.vfunc8 accepts the current child's octant (parent resident mesh mask788 contains that octant); current.vfunc16 permits pairing. The latter RockNode state getter checks spatial-transition bytes34/33/20/16 plus node.hasData, resident mesh and !(mesh.flags792&16). Pairing also records a projected point and uses immediate selection if its movement exceeds a configured NDC/frame threshold. Exact metadata-to-mesh flag semantics remain partly unknown.
+
+The passive run observed fadeEnabled byte9804952=1, duration f32[9804956]=1 second, score width f32[9804960]=2 and NDC movement cutoff f32[10573012]=0.10000000149011612. Func8336 (fade-metric-8336.txt,0x3b0bab–0x3b0e37) drives alpha using a metric state embedded at unpopState16. Constructor defaults: alpha0, thresholdT=-1, anchor0, lastTime=-1, start=-1. Source-derived pseudocode for the enabled branch:
+
+    if now <= lastTime: return
+    lastTime = now
+    if score <= T-W or (score <= T and alpha == 0):
+        alpha=0; anchor=T-W; start=-1; return
+    if score >= T+W or (score >= T and alpha == 1):
+        alpha=1; anchor=T+W; start=-1; return
+    q = clamp(abs(anchor-T)/W, 0, 1)
+    D = duration * (1-q/2)
+    if (score>T) == (anchor<=T) or start == -1:
+        anchor=score; start=now-0.05*D
+    time = clamp((now-start)/D, 0, 1)
+    if anchor >= T:
+        spatial=clamp((score-anchor)/(T+W-anchor),0,1)
+        alpha=max(alpha,spatial,time)
+    else:
+        spatial=clamp((score-anchor)/(T-W-anchor),0,1)
+        alpha=min(alpha,1-max(spatial,time))
+
+The WASM uses f32 at score/alpha boundaries. Func30319 further clamps alpha and applies smoothstep x*x*(3-2*x) at0xaecff6–0xaed027. Func30323 (0xaed17e) selects current immediately via12315, resetting alpha1,anchor=T+W,start=-1 and pair pointers/masks; it does not stamp a parent dependency. Func30322 clears selection through12315 alpha0,anchor=T-W,start=-1. Intermediate blending stores primary and secondary IUnpoppable pointers and masks for the renderer; recreating only opacity without these coverage rules is not full binary equivalence.
+
+
+### Verified request ordering and paired output
+
+The two-element path of sort10706 establishes comparator direction by its conditional swap at0x4f7f8c–0x4f80db. Its lexicographic key is record.i32[28] ascending, f32[24] descending, byte20 true first, f32[12] descending, byte21 true first. Func6332 sets record28=context12=traverser6448, not a resource-kind tag. Record24 is100 for ordinary13112 touches. Byte21 denotes the payload-kind context; byte20 is true for metadata-kind, or for payload-kind when score<global10562408. Static initializer45770 sets10562408=99.0 at0x10bf3f1–0x10bf3fc; its only other direct reference is6332. Therefore ordinary admitted score<99 records in the same6448 mode and request-priority class compare by decreasing source view score, with payload-kind first on exact score ties. This is concrete source evidence for removing unrelated gaze-cone buckets; it does not reconstruct every category's final transport/cancellation behavior.
+
+For the normal initial TimeFadeUnpopState setting i32[8]=1, paired output after smoothstep s is:
+
+- s<0.5: primary=parent, primaryMask=1<<childOctant, secondary=current, secondaryMask=currentDrawMask, secondaryBlend=2*s+(1-2*s)/64.
+- s>=0.5: primary=current, primaryMask=currentDrawMask, secondary=parent, secondaryMask=1<<childOctant, secondaryBlend=2-2*s+(2*s-1)/64.
+
+The source is30319,0xaed031–0xaed0e7;30327 exposes primary blend1 and secondary blend above. Constructor13110 sets the initial frame/settings pair at node844 to i64 8589934591, i.e. frame-1 and setting1. A separate setting0 branch modifies which side stays primary; it is not the observed constructor default. Endpoint alpha0/1 selects only parent/current respectively. Both intermediate branches stamp the parent's fade dependency frame. Masking applies only the parent octant replaced by this child; a whole-parent opacity change would incorrectly affect unrelated octants. The meaning of the blend value in final fragment/depth behavior requires the rendering-shader path and is not established by pointer/weight output alone.
+
+Additional raw artifact live-fade-settings.json has SHA-256 471cbe3a48b7f349c1bc82c20565d99e5e137741932d317a2111d3017dcda847. Newly generated targeted disassemblies and their hashes are retained in ignored assets/manifest.json. The previously listed angular-weight-setter.txt was expanded from a focused excerpt to its complete function; the current manifest, not the earlier excerpt digest, identifies that expanded file.

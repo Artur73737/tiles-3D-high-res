@@ -24,6 +24,7 @@ const satellite=new SatelliteLayer({renderer,radius:6370890});scene.add(satellit
 const streamer=new EarthHQStreaming({renderer,radiusMeters:visibility,retainRadiusMeters:visibility*1.15,activationAltitudeMeters,screenSpaceError:1,maxGpuBytes:4*1024**3,cacheBytes:1024**3,cacheName:qa?'earth-hq-demo-test-v1':'earth-hq-cache-v1'});scene.add(streamer.group);
 const world=new PlayerWorld(streamer),input=new SprintInput(),clock=new THREE.Clock();
 const preferences={speed:1,sensitivity:1,invert:false,crosshair:true,satellite:true};
+let walkingPreparation=false;
 let player=null,frame=null,mode='loading',locked=false,yaw=0,pitch=.08,navToken=0,lastHud=0,lastToast=0,error=null,booting=false;
 // Drag the actual surface point under the cursor, with no velocity or inertia.
 const dragRay=new THREE.Raycaster(),dragSphere=new THREE.Sphere(new THREE.Vector3(),globe.geometry.parameters.radius);
@@ -57,26 +58,35 @@ function streamView(focus){
  const direction=mode==='player'?new THREE.Vector3(-Math.sin(yaw),0,-Math.cos(yaw)).transformDirection(frame.toECEF):camera.getWorldDirection(new THREE.Vector3());
  direction.addScaledVector(normal,-direction.dot(normal));
  const halfAngle=Math.min(Math.PI,Math.atan(Math.tan(THREE.MathUtils.degToRad(camera.fov/2))*camera.aspect)+THREE.MathUtils.degToRad(10));
- streamer.update(camera,{focusECEF:focus,radiusMeters:visibility,viewDirectionECEF:direction.lengthSq()>1e-10?direction:null,viewHalfAngle:halfAngle,nearRadiusMeters:Math.min(60,visibility)});
+ streamer.update(camera,{focusECEF:focus,radiusMeters:visibility,viewDirectionECEF:direction.lengthSq()>1e-10?direction:null,viewHalfAngle:halfAngle,nearRadiusMeters:Math.min(60,visibility),collisionRadiusMeters:mode==='player'&&!player.flying?12:0});
 }
 async function enterAt(latitude,longitude){
  endGlobeDrag();const token=++navToken;
  try{
  if(!Number.isFinite(latitude)||latitude< -90||latitude>90||!Number.isFinite(longitude))throw Error('Invalid coordinates.');
- longitude=((longitude+180)%360+360)%360-180;mode='loading';booting=true;error=null;input.reset();document.exitPointerLock();controls.enabled=false;$('error').hidden=true;locationSearch.close();
+ longitude=((longitude+180)%360+360)%360-180;walkingPreparation=false;mode='loading';booting=true;error=null;input.reset();document.exitPointerLock();controls.enabled=false;$('error').hidden=true;locationSearch.close();
  streamer.group.visible=true;
  const planet=await streamer.start();if(token!==navToken)return;
  frame=localFrame(latitude,longitude,planet.radius);const target=geoToECEF(latitude,longitude,0,planet.radius);
  camera.position.copy(target).addScaledVector(frame.up,100).addScaledVector(frame.south,70);camera.up.copy(frame.up);camera.lookAt(target);
- // Local ground first; distant HQ tiles never gate the landing.
- const coverage=await streamer.requestRegion({latitude,longitude,radiusMeters:Math.min(50,visibility)});if(token!==navToken)return;
- if(!coverage.complete){const problem=coverage.errors[0];if(problem)throw new TileError(problem.code,problem.message,problem.details);throw Error('Local ground incomplete: '+coverage.missingLeaves+' missing tiles, '+coverage.unknownBranches+' unresolved branches.');}
- if(!coverage.requiredLeaves)throw Error('The provider has no declared 3D tiles at this location.');
- world.setFrame(frame);world.refresh(new THREE.Vector3(),{all:true});
- player=new Explorer(world,{min:[-Infinity,-10000,-Infinity],max:[Infinity,10000,Infinity]});player.findSpawn();player.place(player.spawn.clone().add(new THREE.Vector3(0,80,0)));player.flying=true;player.flightMultiplier=preferences.speed;player.grounded=false;yaw=0;pitch=-.18;mode='player';booting=false;scene.background=new THREE.Color(0xbacfdc);applyPlayerCamera();streamView(player.feet.applyMatrix4(frame.toECEF));
+ // Resolve only local metadata for a safe camera elevation. No terminal
+ // disk, payload download, or collision inventory gates flight entry.
+ const ceiling=await streamer.source.surfaceCeiling(frame.up,planet,{isCurrent:()=>token===navToken});if(token!==navToken)return;
+ world.setFrame(frame);
+ player=new Explorer(world,{min:[-Infinity,-10000,-Infinity],max:[Infinity,10000,Infinity]});player.place(new THREE.Vector3(0,ceiling+80,0));player.spawn.copy(player.feet);player.safe.copy(player.feet);player.flying=true;player.flightMultiplier=preferences.speed;player.grounded=false;yaw=0;pitch=-.18;mode='player';booting=false;streamer.setEnabled(true);scene.background=new THREE.Color(0xbacfdc);applyPlayerCamera();streamView(player.feet.applyMatrix4(frame.toECEF));
  }catch(e){if(token!==navToken)return;globeView();showError(e);}
 }
-function globeView(){endGlobeDrag();navToken++;booting=false;mode='globe';streamer.group.visible=false;streamer.setEnabled(false);input.reset();document.exitPointerLock();scene.background=new THREE.Color(0x070f1d);const direction=frame?frame.up:camera.position.clone().normalize();camera.position.copy(direction).multiplyScalar((streamer.planet?.radius??6371010)*2.6);camera.up.set(0,0,1);camera.lookAt(0,0,0);controls.target.set(0,0,0);controls.enabled=true;controls.update();}
+async function startWalking(){
+ if(mode!=='player'||walkingPreparation)return;
+ walkingPreparation=true;const token=navToken;input.reset();document.exitPointerLock();syncSettings(streamer.getCoverage());
+ try{
+  const feet=player.feet,focus=feet.clone().applyMatrix4(frame.toECEF);
+  const coverage=await streamer.requestRegion({focusECEF:focus,radiusMeters:12});if(token!==navToken)return;
+  if(!coverage.complete)throw Error('Walking ground is not ready. Retry Walk after the tiles load.');
+  world.refresh(feet,{all:true});player.findSpawn(feet);world.dirty=true;
+ }catch(error){if(token===navToken)showError(error);}finally{if(token===navToken)walkingPreparation=false;}
+}
+function globeView(){walkingPreparation=false;endGlobeDrag();navToken++;booting=false;mode='globe';streamer.group.visible=false;streamer.setEnabled(false);input.reset();document.exitPointerLock();scene.background=new THREE.Color(0x070f1d);const direction=frame?frame.up:camera.position.clone().normalize();camera.position.copy(direction).multiplyScalar((streamer.planet?.radius??6371010)*2.6);camera.up.set(0,0,1);camera.lookAt(0,0,0);controls.target.set(0,0,0);controls.enabled=true;controls.update();}
 function rebase(){
  const feetECEF=player.feet.applyMatrix4(frame.toECEF),location=ecefToGeo(feetECEF,streamer.planet.radius),newFrame=localFrame(location.latitude,location.longitude,streamer.planet.radius);
  const rotation=new THREE.Quaternion().setFromRotationMatrix(newFrame.toECEF).invert().multiply(camera.quaternion),angles=new THREE.Euler().setFromQuaternion(rotation,'YXZ');yaw=angles.y;pitch=angles.x;
@@ -103,12 +113,15 @@ function setSettingsOpen(open){
  if(open){document.exitPointerLock();input.reset();locationSearch.close();$('settings-close').focus();}else if($('settings-panel').contains(document.activeElement))$('settings-toggle').focus();
 }
 function showHelp(){document.exitPointerLock();setSettingsOpen(false);$('help-dialog').showModal();}
+for(const tab of document.querySelectorAll('[data-panel]'))tab.addEventListener('click',()=>{
+ for(const item of document.querySelectorAll('[data-panel]')){const active=item===tab;item.setAttribute('aria-selected',String(active));$('controls-'+item.dataset.panel).hidden=!active;}
+});
 $('settings-toggle').addEventListener('click',()=>setSettingsOpen($('settings-panel').hidden));
 for(const id of ['settings-close','settings-done'])$(id).addEventListener('click',()=>setSettingsOpen(false));
 $('location').addEventListener('focus',()=>setSettingsOpen(false));
 $('show-shortcuts').addEventListener('click',showHelp);
 $('visit-rome').addEventListener('click',()=>{$('home').click();});
-function refreshDetail(){if(mode==='player'&&streamer.enabled){streamer.refinedPaths.clear();streamer.requestRegion({...streamer.regionOptions(),radiusMeters:visibility,waitForCompletion:false}).catch(showError);}}
+function refreshDetail(){if(mode==='player'&&streamer.enabled){streamer.requestRegion({...streamer.regionOptions(),radiusMeters:visibility,waitForCompletion:false}).catch(showError);}}
 const distanceSelect=$('view-distance');if(![...distanceSelect.options].some(option=>Number(option.value)===visibility))distanceSelect.add(new Option((visibility/1000)+' km',String(visibility)));distanceSelect.value=String(visibility);
 $('view-distance').addEventListener('change',()=>{visibility=Number($('view-distance').value);streamer.radiusMeters=visibility;streamer.retainRadiusMeters=visibility*1.15;refreshDetail();});
 $('detail-level').addEventListener('change',()=>{streamer.screenSpaceError=Number($('detail-level').value);refreshDetail();});
@@ -119,7 +132,7 @@ $('look-sensitivity').addEventListener('input',()=>{preferences.sensitivity=Numb
 $('invert-look').addEventListener('change',()=>preferences.invert=$('invert-look').checked);
 $('show-crosshair').addEventListener('change',()=>{preferences.crosshair=$('show-crosshair').checked;$('crosshair').hidden=!preferences.crosshair;});
 $('satellite-visible').addEventListener('change',()=>{preferences.satellite=$('satellite-visible').checked;satellite.group.visible=preferences.satellite;});
-for(const [id,flying]of [['movement-fly',true],['movement-walk',false]])$(id).addEventListener('click',()=>{if(!player||mode!=='player')return;player.flying=flying;player.velocity.set(0,0,0);player.jumpQueued=false;player.lastSpace=-Infinity;syncSettings(streamer.getCoverage());});
+for(const [id,flying]of [['movement-fly',true],['movement-walk',false]])$(id).addEventListener('click',()=>{if(!player||mode!=='player')return;if(!flying){startWalking();return;}player.flying=true;player.velocity.set(0,0,0);player.jumpQueued=false;player.lastSpace=-Infinity;syncSettings(streamer.getCoverage());});
 $('return-spawn').addEventListener('click',()=>{if(mode!=='player')return;player.reset();world.dirty=true;applyPlayerCamera();});
 $('gpu-budget').addEventListener('change',()=>streamer.setGpuBudget(Number($('gpu-budget').value)*1024**3));
 $('stream-pause').addEventListener('click',()=>{if(mode==='player')streamer.setEnabled(!streamer.enabled);syncSettings(streamer.getCoverage());});
@@ -133,7 +146,7 @@ function syncSettings(coverage){
  const playing=mode==='player',speed=player?.flightMultiplier??preferences.speed;
  if(document.activeElement!==$('flight-speed'))$('flight-speed').value=String(speed);
  $('flight-speed-value').textContent=Number(speed.toFixed(2))+'× · '+Math.round(speed*8)+' m/s';
- for(const id of ['movement-fly','movement-walk','return-spawn','stream-pause','stream-retry'])$(id).disabled=!playing;
+ for(const id of ['movement-fly','movement-walk','return-spawn','stream-pause','stream-retry'])$(id).disabled=!playing||walkingPreparation;
  $('movement-fly').setAttribute('aria-pressed',String(playing&&player.flying));$('movement-walk').setAttribute('aria-pressed',String(playing&&!player.flying));
  $('stream-pause').textContent=streamer.enabled?'Pause 3D':'Resume 3D';
  $('memory-usage').textContent=(coverage.gpuBytes/1048576).toFixed(0)+' MB of '+(streamer.maxGpuBytes/1024**3)+' GB tile budget · '+(coverage.cachePersistent?'Persistent cache':'Memory cache');
@@ -148,7 +161,7 @@ document.addEventListener('mousemove',event=>{if(locked&&mode==='player'){yaw-=e
 document.addEventListener('keydown',event=>{
  if(event.code==='Escape'){document.exitPointerLock();setSettingsOpen(false);return;}if(!locked||mode!=='player')return;
  if(['KeyW','KeyA','KeyS','KeyD','Space','ShiftLeft','ShiftRight','KeyG','KeyR'].includes(event.code))event.preventDefault();input.down(event.code,performance.now(),event.repeat);
- if(event.code==='Space'&&!event.repeat&&player.space(performance.now()))toast(player.flying?'Flight enabled · Space up · Shift down':'Walking enabled');
+ if(event.code==='Space'&&!event.repeat&&player.space(performance.now())){if(!player.flying){player.flying=true;startWalking();}else toast('Flight enabled · Space up · Shift down');}
  if(event.code==='KeyG'&&!event.repeat)globeView();if(event.code==='KeyR'&&!event.repeat){player.reset();world.dirty=true;}
 });
 document.addEventListener('keyup',event=>input.up(event.code));window.addEventListener('blur',()=>{input.reset();endGlobeDrag();});
@@ -162,9 +175,9 @@ function animate(){
   controls.zoomSpeed=ratio;controls.update();
  }
  if(mode==='player'){
-  const feet=player.feet;applyPlayerCamera();streamView(feet.clone().applyMatrix4(frame.toECEF));world.refresh(feet);
+  const feet=player.feet;applyPlayerCamera();if(!walkingPreparation)streamView(feet.clone().applyMatrix4(frame.toECEF));world.refresh(feet);
   const ahead=feet.clone().addScaledVector(player.velocity,dt);
-  if(locked&&world.readyAt(ahead)){const maxSpeed=player.flying?Math.hypot(8*(input.keys.sprint?3:1),6)*player.flightMultiplier:10,steps=Math.max(1,Math.ceil(dt/(1/180)),Math.ceil(Math.max(maxSpeed,player.velocity.length())*dt/(player.radius*.75)));for(let i=0;i<steps;i++)player.step(dt/steps,input.keys,yaw);}
+  if(locked&&!walkingPreparation&&(player.flying||world.readyAt(ahead))){const maxSpeed=player.flying?Math.hypot(8*(input.keys.sprint?3:1),6)*player.flightMultiplier:10,steps=Math.max(1,Math.ceil(dt/(1/180)),Math.ceil(Math.max(maxSpeed,player.velocity.length())*dt/(player.radius*.75)));for(let i=0;i<steps;i++)player.step(dt/steps,input.keys,yaw);}
   else if(locked&&performance.now()-lastToast>5000){lastToast=performance.now();toast('Loading nearby ground…');}
   if(Math.hypot(player.feet.x,player.feet.z)>1500)rebase();applyPlayerCamera();
  }
@@ -172,11 +185,11 @@ function animate(){
  renderer.render(scene,camera);
  if(performance.now()-lastHud>250){lastHud=performance.now();const c=streamer.getCoverage(),point=mode==='player'?player.feet.applyMatrix4(frame.toECEF):camera.position,geo=ecefToGeo(point);
   syncSettings(c);
-  $('mode').textContent=mode==='player'?player.flying?'FLIGHT':input.keys.sprint?'SPRINT':'WALK':mode==='loading'?'LOADING':'GLOBE';
+  $('mode').textContent=walkingPreparation?'GROUND':mode==='player'?player.flying?'FLIGHT':input.keys.sprint?'SPRINT':'WALK':mode==='loading'?'LOADING':'GLOBE';
   $('speed').hidden=mode!=='player'||!player.flying;
   if(player)$('speed').textContent=Number(player.flightMultiplier.toFixed(2))+'× · '+Math.round(8*player.flightMultiplier*(input.keys.sprint?3:1))+' m/s';
   $('coordinates').textContent=geo.latitude.toFixed(5)+'° / '+geo.longitude.toFixed(5)+'°';
-  $('coverage').textContent=mode==='globe'?'3D paused':c.readyLeaves+' / '+c.requiredLeaves+' 3D tiles'+(c.status==='discovering'?' · discovering area':c.complete?' · complete':' · streaming')+(c.previewTiles?' · '+c.previewTiles+' previews':'');
+  $('coverage').textContent=mode==='globe'?'3D paused':c.readyLeaves+' / '+c.requiredLeaves+' 3D tiles'+(c.status==='discovering'?' · discovering area':c.complete?' · complete':' · streaming');
   const height=Math.max(0,geo.altitude),sat=satellite.status();
   $('altitude').textContent='Altitude '+(height>=10000?(height/1000).toLocaleString('en-US',{maximumFractionDigits:0})+' km':height.toLocaleString('en-US',{maximumFractionDigits:0})+' m');
   $('distance').textContent='View '+(visibility>=1000?(visibility/1000).toLocaleString('en-US')+' km':visibility+' m');

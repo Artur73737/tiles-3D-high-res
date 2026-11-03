@@ -7,7 +7,7 @@ export class Explorer {
   this.capsule=new Capsule(new Vector3(),new Vector3(),this.radius);
   this.velocity=new Vector3();this.grounded=false;this.flying=false;this.flightMultiplier=1;
   this.lastSpace=-Infinity;this.safe=new Vector3();this.spawn=new Vector3();
-  this.contactCount=0;this.edgeBlocked=false;this.jumpQueued=false;
+  this.spawnIsGround=false;this.contactCount=0;this.edgeBlocked=false;this.jumpQueued=false;
  }
  get feet(){return new Vector3(this.capsule.start.x,this.capsule.start.y-this.radius,this.capsule.start.z);}
  get eye(){return this.feet.add(new Vector3(0,1.63,0));}
@@ -22,26 +22,26 @@ export class Explorer {
   const normal=hit.triangle.getNormal(new Vector3());
   return normal.y>.55?hit.position:null;
  }
- findSpawn(){
+ findSpawn(centre=this.feet){
   const candidates=[];
   for(const z of [0,3,-3,8,-8,15,-15])for(const x of [0,-3,3,-8,8,-15,15]){
-   const p=this.ground(x,z);if(p)candidates.push(p);
+   const p=this.ground(centre.x+x,centre.z+z);if(p)candidates.push(p);
   }
   if(!candidates.length)throw Error('No walkable surface found in the available tiles.');
   // Favor the exterior plaza, away from rooftop surfaces.
   const low=Math.min(...candidates.map(p=>p.y));
   const visible=candidates.filter(p=>{
-   const direction=new Vector3(-p.x,0,-p.z).normalize();
+   const direction=new Vector3(centre.x-p.x,0,centre.z-p.z).normalize();
    const hit=this.world.rayIntersect(new Ray(p.clone().add(new Vector3(0,1.6,0)),direction));
    return !hit||hit.distance>12;
   });
-  const good=(visible.length?visible:candidates).filter(p=>p.y<low+5).sort((a,b)=>Math.hypot(a.x,a.z)-Math.hypot(b.x,b.z));
+  const good=(visible.length?visible:candidates).filter(p=>p.y<low+5).sort((a,b)=>Math.hypot(a.x-centre.x,a.z-centre.z)-Math.hypot(b.x-centre.x,b.z-centre.z));
   if(!good.length)good.push(...candidates.sort((a,b)=>a.y-b.y));
-  this.spawn.copy(good[0]);this.spawn.y+=.025;
+  this.spawnIsGround=true;this.spawn.copy(good[0]);this.spawn.y+=.025;
   this.reset();return this.spawn;
  }
  adjustFlightSpeed(delta){if(this.flying&&Number.isFinite(delta)&&delta!==0)this.flightMultiplier=Math.max(1,Math.min(16,this.flightMultiplier*(delta<0?1.25:.8)));return this.flightMultiplier;}
- reset(){this.place(this.spawn);this.safe.copy(this.spawn);this.flying=false;this.grounded=true;this.lastSpace=-Infinity;}
+ reset(){this.place(this.spawn);this.safe.copy(this.spawn);this.flying=!this.spawnIsGround;this.grounded=this.spawnIsGround;this.lastSpace=-Infinity;}
  space(time){
   if(time-this.lastSpace<310){this.flying=!this.flying;this.velocity.set(0,0,0);this.jumpQueued=false;this.lastSpace=-Infinity;return true;}
   this.lastSpace=time;if(!this.flying&&this.grounded)this.jumpQueued=true;return false;

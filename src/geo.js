@@ -19,18 +19,6 @@ export function intersectsRegion(node,spec){
  const angle=Math.acos(Math.max(-1,Math.min(1,delta.dot(spec.viewDirection)/distance)));
  return angle<=spec.viewHalfAngle+Math.asin(Math.min(1,node.radius/distance));
 }
-// A preview can retire only when its entire footprint was examined, including
-// its edges. A count of zero inside a view sector proves nothing outside it.
-export function containsRegion(node,spec){
- const axial=node.center.dot(spec.normal);if(axial-node.radius<0)return false;
- const delta=node.center.clone().addScaledVector(spec.normal,-axial),distance=delta.length();
- if(distance+node.radius>spec.radius)return false;
- if(!spec.viewDirection||distance+node.radius<=spec.nearRadius)return true;
- if(distance<=node.radius)return false;
- const angle=Math.acos(Math.max(-1,Math.min(1,delta.dot(spec.viewDirection)/distance)));
- return angle+Math.asin(Math.min(1,node.radius/distance))<=spec.viewHalfAngle;
-}
-
 // OBB axes are the columns of the row-major 3x3 metadata rotation.
 export function nearestNodePoint(node,point){
  const d=point.clone().sub(node.center);

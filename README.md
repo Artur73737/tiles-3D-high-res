@@ -51,7 +51,7 @@ Generated artifacts, dependencies, local caches and downloaded fixtures are excl
 
 The globe uses satellite tiles. Drag to rotate with direct 1:1 surface tracking: the grabbed point stays under the pointer, with no acceleration or inertia after release. Use the wheel or the plus/minus buttons to zoom, or search for a location, city, country or street. Press Enter or the search icon, then select a result to centre the satellite globe. Country and city results use a wider view than street addresses. **Fly 3D** enters flight over the point at the centre of the globe view. Double-clicking a point on the globe enters 3D there. The home button returns to the Rome demonstration in 3D.
 
-In 3D, click the scene to capture the mouse. Escape releases it. The compact dark vertical rail holds globe/flight modes, Controls, Rome and Help. Place search floats independently above the scene. A slim bottom strip shows altitude, view distance and streaming progress; Details expands diagnostics. The Control centre opens beside the rail. Its content scrolls on smaller screens, and the status strip hides while the panel is open to prevent overlap. Flight currently requires a keyboard and mouse; touch movement controls are not implemented.
+In 3D, click the scene to capture the mouse. Escape releases it. A 34 px floating toolbar holds globe/flight modes, Controls, Rome and Help. A small place-search field occupies the opposite corner. There is no permanent sidebar or status banner. Controls opens a 268 px popover with Move, Picture, Input and Stream tabs; altitude, progress and diagnostics live in Stream. With Controls closed, the tested interface occupies 1.3% of a 1440x900 viewport and 4.6% of a 390x844 viewport. Flight currently requires a keyboard and mouse; touch movement controls are not implemented.
 
 The **Controls** panel changes the live viewer:
 
@@ -78,14 +78,14 @@ Settings last for the current page session. High is the default detail scale (1)
 | Double-tap Space | Toggle flight and walking |
 | Space while walking | Jump |
 | G | Return to the satellite globe |
-| R | Reset to the local ground spawn |
+| R | Return to the starting point (flight or prepared ground) |
 | Escape | Release the pointer |
 
 Flight starts at 8 m/s horizontally. Each wheel step changes the speed multiplier by 25%; scrolling backward stops at the default. The multiplier also applies to ascent/descent and combines with sprint. Collision steps scale with travel distance at higher speeds. In globe mode the wheel still zooms.
 
 Place search uses the [Photon public geocoder](https://github.com/komoot/photon/blob/master/docs/api-v1.md), with OpenStreetMap data. Queries are sent only on submission, not on every keystroke. Search requests time out after 12 seconds; replacing the query or dismissing results cancels the old request. The geocoder is separate from tile delivery: both imagery layers still use the same tile provider. The public search service has no availability guarantee.
 
-The initial flight position is 80 m above a verified local ground surface. Walking and flight collide with the available photogrammetric triangles. Movement waits for local terrain/colliders to be ready. Gaps and inaccuracies in the provider's geometry can affect collisions.
+Flight entry resolves a conservative local elevation bound from metadata, then starts 80 m above that bound. It does not wait for a disk of terminal geometry. Flight remains responsive while geometry streams and collides with available meshes. Selecting Walk explicitly prepares a 12 m terminal ground region and finds a walkable surface; walking then keeps local terminal collision data available. Gaps and inaccuracies in the provider's geometry can affect collisions.
 
 Optional URL parameters:
 
@@ -106,33 +106,37 @@ globo-hq.html?view=3d&hqAltitude=1800    Activate automatic HQ streaming below 1
 
 The default maximum request zoom is **22**, configurable through `maxZoom`. The layer requests the detail needed at the current view scale, up to that ceiling. Native image resolution varies by location; requesting a higher zoom cannot create detail absent from the source. Satellite coverage ends at approximately +/-85.05 degrees latitude, the Web Mercator limit; polar caps use the base sphere color.
 
-Requests, decoded image ownership, view selection and LRU eviction are managed by the satellite layer inside the bundle. The demo HTML does not implement a second map provider. The layer retains up to 512 raster tiles by default and uses eight concurrent requests, mipmaps and anisotropic filtering.
+Requests, decoded image ownership, view selection and LRU eviction are managed by the satellite layer inside the bundle. The demo HTML does not implement a second map provider. The layer retains up to 512 raster tiles by default and uses eight concurrent requests, mipmaps and anisotropic filtering. A parent stops drawing after all selected child patches are resident; it is restored if a required child disappears.
 
 ### Maximum-detail 3D terrain
 
 `EarthHQStreaming` has two demand policies. The viewer uses camera-driven progressive selection (`screenSpaceError: 1`). Explicit `requestRegion()` calls without a camera still enumerate every selected terminal node, useful when complete terminal coverage of a small area is required. Neither policy imposes a hard-coded depth ceiling. Terrain, buildings and decoded additional surface layers are retained.
 
-The camera policy follows the shipping reference client's reconstructed projection score and live settings. It uses oriented metadata boxes and the horizontal pixel scale:
+The camera policy follows the shipping reference client's reconstructed projection, admission and request-order rules. It uses oriented metadata boxes and the horizontal pixel scale:
 
 ```text
 angularFactor = max(1e-9, 1-weight + weight * max(0, -dot(outward, ray))^0.2)
 projectedTexel = metersPerTexel * horizontalPixelScale / closestBoxForwardDepth * angularFactor
 score = log2(0.8) + log2(projectedTexel / screenSpaceError)
 cold refinement: score > -0.2
-retain refinement: score >= -1
+payload admission: score >= -1
 ```
 
-The thresholds, projection operations, texture request families and 12-worker ceiling were checked against downloaded assets and the running reference renderer. The evidence, artifact hashes, offsets and remaining differences are documented in [Reference client analysis](docs/reference-client-analysis.md). The angular weight is derived from decoded mesh geographic bounds, with a coalesced selection pass after geometry arrives. Parent-metadata borrowing, fade transitions and the reference's dynamic scheduling settings are not fully reconstructed; this is not a claim of binary-identical renderer behavior.
+The thresholds, projection operations, parent-mesh staging, request comparator, texture request families and 12-worker ceiling were checked against downloaded assets and the running reference renderer. The evidence, artifact hashes, offsets and remaining differences are documented in [Reference client analysis](docs/reference-client-analysis.md). The angular weight is derived from decoded mesh geographic bounds, with a coalesced selection pass after geometry arrives. The code uses direct octant replacement. The original paired fade/unpop rules have been recovered in the report but their final shader behavior is not reproduced here. Parent-metadata borrowing and the complete transport cancellation policy also remain outside the verified implementation. This is not a claim of a complete, unchanged copy of the reference renderer.
 
-Visible coarse nodes load first, then their visible descendants. Camera-frustum culling avoids walking distant off-screen branches to their deepest leaves. Pending metadata uses a priority queue; decoded payloads begin loading while discovery continues. Every node uses its own provider epoch. Imagery-epoch nodes request `!2e1!3u...`; photogrammetric nodes request `!2e6`, matching the observed request families. Browser decoding runs in an embedded pool of up to `min(hardwareConcurrency, 12)` workers. The worker code stays inside the same JS bundle and self-contained HTML.
+A visited metadata node does not automatically become a payload request. Nodes below the admission threshold leave their footprint to an admitted ancestor. Continuing into metadata uses the separate upper threshold; the former permanent `refinedPaths` hysteresis has been removed because the reference's recent-frame exception belongs to active fades, not to metadata visits.
 
-Each arriving child replaces its own octant of its parent mesh. Other octants remain visible until their children are available. Unknown metadata cannot hide a fallback. Turning preserves resident geometry inside the retention radius, and evicting a child restores the parent portion. Geometry buffers retain an immutable collision index independently of render masks.
+In the observed 3D traversal profile, a node can request its own payload while its parent loads, but expanding that node waits for the parent's resident mesh. This allows two generations to overlap without crawling every descendant before ancestor data arrives. The demo uses this staged profile throughout its Rocktree traversal. There is no separate preview queue or full-radius preflight scheduler.
 
-Approaching the surface increases the projection score and continues traversal to the provider's terminal nodes wherever the visible detail requires it. The 8 m disk around the player additionally requests terminal ground in every direction. Flight entry prepares a complete 50 m local ground inventory before spawning. Collision readiness beyond the near disk requires the whole capsule to lie in the examined view; off-screen missing demand does not count as empty terrain.
+Requests use the recovered lexicographic comparator: traversal mode, request priority, resource flag, decreasing projection score, then payload before metadata for exact ties. The old gaze buckets and fixed payload/metadata burst ratio have been removed. Every node uses its own provider epoch. Imagery-epoch nodes request `!2e1!3u...`; photogrammetric nodes request `!2e6`, matching the observed request families. Browser decoding runs in an embedded pool of up to `min(hardwareConcurrency, 12)` workers. The worker code stays inside the same JS bundle and self-contained HTML.
+
+Each arriving child replaces its own octant of its parent mesh. Other octants remain visible until their children are available. Unknown metadata cannot hide a fallback. Turning preserves resident geometry inside the retention radius, and evicting a child restores the parent portion. Local collision meshes are rebuilt when their visible octant masks change, so a replaced coarse surface cannot remain as an invisible collision wall.
+
+Approaching the surface increases the projection score and continues traversal to the provider's terminal nodes wherever the visible detail requires it. A terminal ground disk is requested only while walking. Flight selection follows the camera. Off-screen missing demand does not establish collision coverage, and flight is no longer stalled by that missing inventory.
 
 Movement and camera changes update selection, including vertical movement, pitch and viewport changes. Short bursts of movement coalesce while useful metadata work finishes; a large direction change can replace demand immediately. Root metadata is refreshed periodically rather than fetched afresh on every small camera movement. Tile metadata and bytes retain HTTP freshness semantics.
 
-Automatic 3D requests start below **2,500 m**, pause above **3,000 m**, and resume on descent. Globe mode explicitly pauses 3D; **Fly 3D** enters flight. The satellite layer continues independently. Legacy `previewRadiusMeters` only applies to explicit terminal-region requests; the camera viewer uses the hierarchy itself for fallback rendering.
+Automatic 3D requests start below **2,500 m**, pause above **3,000 m**, and resume on descent. Globe mode explicitly pauses 3D; **Fly 3D** enters flight. The satellite layer continues independently. The old `previewRadiusMeters` option, separate preview collections and preview counters have been removed. Use camera selection for progressive fallback rendering; explicit region requests still provide terminal coverage through the single asset queue.
 
 ### Coverage is explicit
 
@@ -236,7 +240,7 @@ await terrain.dispose();
 
 Without a heading, a region request covers a full disk. `requestRegion({..., waitForCompletion:false})` starts discovery without waiting for completion. `waitForIdle(timeoutMs)` defaults to 120 seconds; the automatic update loop does not impose that timeout on distant background loading.
 
-Coverage includes `status`, `complete`, `cameraAltitudeMeters`, `requiredLeaves`, `readyLeaves`, `missingLeaves`, `unknownBranches`, `failedLeaves`, `previewTiles`, `residentPreviews`, `gpuBytes`, `errors`, and network/cache counters. Use `getAttribution()` for runtime map credits. Camera selection is enabled with the constructor option `screenSpaceError: 1`; explicit region calls without `cameraView` continue to request terminal coverage.
+Coverage includes `status`, `complete`, `cameraAltitudeMeters`, `requiredLeaves`, `readyLeaves`, `missingLeaves`, `unknownBranches`, `failedLeaves`, `gpuBytes`, `errors`, and network/cache counters. Use `getAttribution()` for runtime map credits. Camera selection is enabled with the constructor option `screenSpaceError: 1`; explicit region calls without `cameraView` continue to request terminal coverage.
 
 ### Satellite API
 
@@ -266,7 +270,7 @@ await satellite.dispose();
 | IndexedDB byte budget | 512 MiB | 1 GiB |
 | Estimated 3D GPU budget | 512 MiB | 4 GiB |
 | Maximum individual 3D response | 64 MiB | 64 MiB |
-| Camera screen-space error scale | Disabled (`0`) | `1`, with reconstructed hysteresis |
+| Camera screen-space error scale | Disabled (`0`) | `1`, with separate admission and continuation thresholds |
 | Decoder workers | Main-thread source fallback in Node | Up to 12 embedded workers |
 | Satellite requests / retained images | 8 / 512 | 8 / 512 |
 
@@ -307,39 +311,39 @@ $env:BROWSER_EXECUTABLE = 'C:/Program Files/Google/Chrome/Application/chrome.exe
 npm run test:viewer
 ```
 
-Source tests cover real captured decoding, terminal traversal, unknown metadata, cache freshness, cancellation, late completion, resource disposal, capacity recovery, altitude gating, gaze and pitch prioritization, progressive inventory publication, wheel speed limits, geocoder response validation, local collision inventory, preview retirement, rotation retention and satellite patch geometry. Browser tests require live network access and write ignored reports/screenshots into `test-results/`.
+Source tests cover real captured decoding, terminal traversal, unknown metadata, cache freshness, cancellation, late completion, resource disposal, capacity recovery, altitude gating, gaze and pitch prioritization, staged parent dependencies, reference request ordering, wheel speed limits, geocoder response validation, local collision inventory, partial octant replacement, rotation retention and satellite patch geometry. Browser tests require live network access and write ignored reports/screenshots into `test-results/`.
 
-The network test injects startup, metadata and tile-request failures in Chrome and checks automatic recovery, bounded failure, and a successful second entry into flight. The viewer test checks satellite detail growth, independent layer demand, flight entry and responsive UI. The controls test checks place search, wheel speed, keyboard selection, compact layouts and camera-view completion in Chrome. The rotation test checks object identity/retention after turning away and back. The automatic/view test checks mixed-depth two-kilometre demand, workers, camera turns, resident retention and deeper terminal selection on descent. The altitude test checks pause/resume while flying and explicit pause in globe mode. Some headless tests cap rendering at approximately 10 fps to control software-rendering cost; the actual viewer has no such cap.
+The network test injects startup, metadata and tile-request failures in Chrome and checks automatic recovery, bounded failure, and a successful second entry into flight. The viewer test checks satellite detail growth, independent layer demand, flight entry and responsive UI. The controls test checks place search, wheel speed, keyboard selection, tabbed settings, dark-theme layout, screen occupancy, walking preparation and camera-view completion in Chrome. The rotation test checks object identity/retention after turning away and back. The automatic/view test checks mixed-depth two-kilometre demand, workers, camera turns, resident retention and deeper terminal selection on descent. The altitude test checks pause/resume while flying and explicit pause in globe mode. Some headless tests cap rendering at approximately 10 fps to control software-rendering cost; the actual viewer has no such cap.
 
-The earlier terminal-region scheduler's 2026-10-30 measurements (24.9–36.3 s for the first central block while global discovery continued) are superseded by camera selection. The rebuilt renderer completed a 1280x800 Rome view in 22.5 s from navigation, including 7.1 s for verified ground entry. It selected depths 16–22, retained all 861 resident tiles through a turn, and selected 241 terminal nodes near the ground versus 12 from the initial altitude. Fast flight advanced 249.8 m during the 1.5-second headless input check. The final controls runs completed the same 1280x800 view in 39.1–60.8 s, including 12.5–21.4 s ground entry. Two earlier 1440x900 runs exceeded the 60-second completion check; network loading time remains variable. UI layout checks cover four desktop and mobile sizes. Synthetic hierarchy tests additionally reach terminal depth 30, establishing that no 22/25-level cap exists in the implementation.
+On 2026-11-03, the automatic browser check entered flight in **0.96 s** and completed the initial 1280x800 Rome view in **17.03 s** from navigation. It selected 171 nodes at depths 16–20 and retained all 316 resident tiles through a turn. Descending selected 296 nodes, including 123 actual terminals, at depths 15–22. Synthetic hierarchy tests additionally reach terminal depth 30, establishing that there is no 22/25-level cap. These are camera-dependent mixed-depth views, not terminal coverage of the entire disk. The controls check covers four viewport sizes, search, settings, wheel speed and walking preparation.
 
-An intermediate camera-selection build (before the final forward-depth and angular correction) was compared at 960x600 against commit `41c9936` measured the same flight entry plus 15 seconds of observation, with cold and warm browser caches. This compares different detail policies at the same camera, not identical terminal inventories:
+A matched comparison against commit `49f8ccf` used a 960x600 viewport, a 2 km viewing distance, detail scale 1 and the same camera position, orientation and 110 m altitude after entry. Each run observed approximately 15 seconds after entry; the headless renderer was capped at 10 fps. Cold and warm runs used isolated browser profiles with persistent cache reuse between the pair:
 
-| Cache | Version | Ground entry | View complete at observation end | CPU seconds | Peak sampled family working set | Peak sampled private bytes |
-| --- | --- | --- | --- | --- | --- | --- |
-| Cold | Before | 5.21 s | No, discovering | 20.33 | 998 MiB | 971 MiB |
-| Cold | After | 4.81 s | Yes, 195 selected nodes | 19.81 | 1,210 MiB | 1,393 MiB |
-| Warm | Before | 1.16 s | No, discovering | 15.21 | 1,138 MiB | 1,150 MiB |
-| Warm | After | 1.52 s | Yes, 195 selected nodes | 12.90 | 1,368 MiB | 1,628 MiB |
+| Cache | Version | Flight entry | Observation elapsed | Requests | CPU seconds | Peak sampled family working set | Peak sampled private bytes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Cold | Before | 4.95 s | 19.95 s | 754 | 19.10 | 1,156 MiB | 1,232 MiB |
+| Cold | After | 0.86 s | 15.88 s | 270 | 10.92 | 928 MiB | 905 MiB |
+| Warm | Before | 0.61 s | 15.65 s | 1 | 11.83 | 1,443 MiB | 1,666 MiB |
+| Warm | After | 0.70 s | 15.72 s | 3 | 12.37 | 1,124 MiB | 1,329 MiB |
 
-Cold network requests fell from 1,054 to 692 at observation end. The warm intermediate view used one root request and 691 disk-cache hits. The additional decoder workers increase process memory; the change improves progressive selection and response rather than claiming lower total memory. CPU includes the dedicated Chrome family, with 10 fps headless rendering in this comparison. Samples can miss short-lived peaks, working sets can double-count shared pages, and harness/PowerShell overhead is excluded. Agent token usage was not measured. Live network results vary.
+Both versions reported their selected view complete at observation end. The corrected admission policy selected 113 nodes with 233 resident assets, versus 212 selected and 695 resident before; this compares selection policies at identical camera settings, not identical downloaded leaf inventories. Cold transferred bytes fell from 37.09 MB to 20.77 MB. Warm cache hits were 753 before and 269 after. Warm entry and CPU did not improve. Entry now uses metadata elevation instead of blocking on a terminal ground disk; walking still prepares ground explicitly.
 
-Reproduce this observation mode after building the desired version:
+CPU includes the dedicated Chrome process family. The observation timer can overrun while the browser is busy. Memory samples can miss short-lived peaks, working sets can double-count shared pages, and harness/PowerShell overhead is excluded. Agent token usage was not measured. Live network results vary; these measurements do not establish a universal loading speed. The benchmark preceded the final collision-mask, elevation-bound and budget-recovery fixes, which were checked separately by source and browser tests.
+
+Reproduce the matched observation after building each version, using a distinct label for each:
 
 ```sh
-node test/performance.mjs view-current globo-hq.html 2000 15
+node test/performance.mjs view-current globo-hq.html 2000 15 110
 ```
 
-Ignored JSON reports and screenshots live under `test-results/`. The source asset analysis and measured live settings remain in the linked reference report.
-
-`test/performance.mjs` provides a Windows Chrome process-family benchmark for a completed 50 m region with cold and warm persistent-cache runs. It records elapsed time, transferred bytes, sampled CPU and memory; shared working sets and unsampled peaks limit those measurements. It does not measure agent tokens. `test/profile.mjs` is a local profiling helper. These tools do not establish a universal loading speed.
+Ignored JSON reports and screenshots live under `test-results/`. The source asset analysis and measured live settings remain in the linked reference report. `test/performance.mjs` also supports a completed 50 m terminal-region benchmark when the observation duration is omitted. `test/profile.mjs` is a local profiling helper.
 
 ## Source layout
 
 ```text
 src/index.js              Public bundle exports
 src/satellite.js          Raster selection, requests, meshes and image lifetime
-src/streamer.js           3D demand, previews, capacity and asset lifetime
+src/streamer.js           Unified 3D traversal, admission, capacity and asset lifetime
 src/source.js             Rocktree metadata traversal and payload loading
 src/transport.js          Deduplicated, prioritized, bounded byte requests
 src/cache.js              RAM and IndexedDB caches

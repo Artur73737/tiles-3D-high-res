@@ -42,12 +42,20 @@ export class SatelliteLayer {
   };
   visit(this.node(0,0,0));this.needed=needed;this.targetZoom=targetZoom;
   for(const [key,record]of this.resident){record.mesh.visible=needed.has(key);if(record.mesh.visible)record.used=performance.now();}
+  this.updateVisibility();
   for(const [key,task]of this.active)if(!needed.has(key))task.controller.abort();
   this.queue=[...needed].map(key=>this.nodes.get(key)).filter(node=>!this.resident.has(node.key)&&!this.active.has(node.key)&&(this.failed.get(node.key)??0)<Date.now()).sort((a,b)=>a.z-b.z||this.cameraPosition.distanceToSquared(a.center)-this.cameraPosition.distanceToSquared(b.center));
   // Keep parent coverage while finer tiles arrive; only off-view records are LRU.
   for(const [key]of this.nodes)if(!needed.has(key)&&!this.resident.has(key)&&!this.active.has(key))this.nodes.delete(key);
   for(const key of this.failed.keys())if(!this.nodes.has(key))this.failed.delete(key);
   this.pump();
+ }
+ updateVisibility(){
+  for(const [key,record]of this.resident){
+   const {z,x,y}=record.node,children=[];for(let dy=0;dy<2;dy++)for(let dx=0;dx<2;dx++)children.push(`${z+1}/${x*2+dx}/${y*2+dy}`);
+   const selected=children.filter(child=>this.needed.has(child));
+   record.mesh.visible=this.needed.has(key)&&!(selected.length&&selected.every(child=>this.resident.has(child)));
+  }
  }
  pump(){
   if(this.disposed)return;
@@ -65,11 +73,11 @@ export class SatelliteLayer {
   try{
    this.requests++;const response=await this.fetch(`${SATELLITE_SERVICE}?lyrs=s&x=${node.x}&y=${node.y}&z=${node.z}`,{signal,credentials:'omit'});
    if(response.status===404||response.status===204){node.missingUntil=Date.now()+300000;this.failed.set(node.key,node.missingUntil);return;}
-   if(!response.ok)throw Error('Tile satellitare: HTTP '+response.status);
-   const blob=await response.blob();if(blob.size>2*1024**2)throw Error('Tile satellitare troppo grande');bitmap=await createImageBitmap(blob,{imageOrientation:'flipY'});
-   if(bitmap.width!==256||bitmap.height!==256)throw Error('Dimensioni della tile satellitare non valide');
+   if(!response.ok)throw Error('Satellite tile: HTTP '+response.status);
+   const blob=await response.blob();if(blob.size>2*1024**2)throw Error('Satellite tile exceeds the byte limit');bitmap=await createImageBitmap(blob,{imageOrientation:'flipY'});
+   if(bitmap.width!==256||bitmap.height!==256)throw Error('Invalid satellite tile dimensions');
    if(this.disposed||signal.aborted||!this.needed.has(node.key))return;
-   mesh=this.build(node,bitmap);this.resident.set(node.key,{mesh,used:performance.now(),node});this.group.add(mesh);this.failed.delete(node.key);
+   mesh=this.build(node,bitmap);this.resident.set(node.key,{mesh,used:performance.now(),node});this.group.add(mesh);this.failed.delete(node.key);this.updateVisibility();
   }catch(error){if(!this.disposed&&this.needed.has(node.key)){this.failed.set(node.key,Date.now()+30000);if(error.name!=='AbortError')this.error=error.message;}}
   finally{clearTimeout(timeout);if(!mesh)bitmap?.close();}
  }

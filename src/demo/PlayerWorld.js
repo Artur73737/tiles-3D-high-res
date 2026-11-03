@@ -3,9 +3,9 @@ import {Capsule} from 'three/addons/math/Capsule.js';
 import {CollisionWorld} from './CollisionWorld.js';
 import {intersectsColumn} from '../geo.js';
 export class PlayerWorld {
- constructor(streamer){this.streamer=streamer;this.frame=null;this.center=new Vector3();this.localNormal=null;this.nearAssets=new Map();this.nearRequired=new Map();this.requiredInventory=null;this.collisions=new Map();this.empty=new Set();this.scratch=new Capsule();this.box=new Box3();this.dirty=true;this.onLoad=({asset})=>{if(this.localNormal&&intersectsColumn(asset.descriptor,this.localNormal,24)){this.nearAssets.set(asset.descriptor.key,asset);this.dirty=true;}};this.onUnload=({asset})=>{this.nearAssets.delete(asset.descriptor.key);this.remove(asset.descriptor.key);};streamer.addEventListener('tile-load',this.onLoad);streamer.addEventListener('tile-unload',this.onUnload);}
+ constructor(streamer){this.streamer=streamer;this.frame=null;this.center=new Vector3();this.localNormal=null;this.nearAssets=new Map();this.nearRequired=new Map();this.requiredInventory=null;this.collisions=new Map();this.colliderMasks=new Map();this.empty=new Set();this.scratch=new Capsule();this.box=new Box3();this.dirty=true;this.onLoad=({asset})=>{if(this.localNormal&&intersectsColumn(asset.descriptor,this.localNormal,24)){this.nearAssets.set(asset.descriptor.key,asset);this.dirty=true;}};this.onUnload=({asset})=>{this.dirty=true;this.nearAssets.delete(asset.descriptor.key);this.remove(asset.descriptor.key);};streamer.addEventListener('tile-load',this.onLoad);streamer.addEventListener('tile-unload',this.onUnload);}
  setFrame(frame){for(const key of [...this.collisions.keys()])this.remove(key);this.empty.clear();this.frame=frame;this.center.set(Infinity,Infinity,Infinity);this.localNormal=null;this.nearAssets.clear();this.nearRequired.clear();this.requiredInventory=null;this.dirty=true;}
- remove(key){const c=this.collisions.get(key);if(c)c.geometry.dispose();this.collisions.delete(key);this.empty.delete(key);}
+ remove(key){const c=this.collisions.get(key);if(c)c.geometry.dispose();this.collisions.delete(key);this.empty.delete(key);this.colliderMasks.delete(key);}
  refresh(feet,{all=false}={}){
   if(!this.frame)return;
   const inventory=this.streamer.collisionInventory??this.streamer.wanted;
@@ -13,19 +13,21 @@ export class PlayerWorld {
   const moved=this.center.distanceTo(feet)>3;
   if(moved||demandChanged){this.center.copy(feet);this.localNormal=feet.clone().applyMatrix4(this.frame.toECEF).normalize();this.nearAssets.clear();for(const [key,asset]of this.streamer.assets)if(inventory.has(key)&&intersectsColumn(asset.descriptor,this.localNormal,24))this.nearAssets.set(key,asset);this.dirty=true;}
   if(moved||demandChanged){this.requiredInventory=inventory;this.nearRequired.clear();for(const [key,node]of this.requiredInventory)if(intersectsColumn(node,this.localNormal,24))this.nearRequired.set(key,node);}
+  for(const [key,asset]of this.nearAssets)if(this.colliderMasks.get(key)!==asset.mask)this.dirty=true;
   if(!this.dirty)return;
   const wanted=new Set(),begin=performance.now();let remaining=false;
   for(const[key,asset]of this.nearAssets){
    if(!inventory.has(key))continue;
-   wanted.add(key);if(this.collisions.has(key)||this.empty.has(key))continue;
+   wanted.add(key);if(this.colliderMasks.get(key)===asset.mask&&(this.collisions.has(key)||this.empty.has(key)))continue;this.remove(key);
    if(!all&&performance.now()-begin>5){remaining=true;continue;}
    const transform=new Matrix4().multiplyMatrices(this.frame.fromECEF,asset.group.matrix),geometries=[];
    for(const mesh of asset.group.children){
+    if(mesh.geometry.drawRange.count===0)continue;
     const source=mesh.geometry.attributes.position,p=new Float32Array(source.count*3),v=new Vector3();
     for(let i=0;i<source.count;i++){v.fromBufferAttribute(source,i).applyMatrix4(transform);v.toArray(p,i*3);}
-    const geometry=new BufferGeometry();geometry.setAttribute('position',new BufferAttribute(p,3));geometry.setIndex((mesh.geometry.userData.collisionIndex??mesh.geometry.index).clone());geometries.push(geometry);
+    const geometry=new BufferGeometry();geometry.setAttribute('position',new BufferAttribute(p,3));geometry.setIndex(new BufferAttribute(mesh.geometry.index.array.slice(0,mesh.geometry.drawRange.count),1));geometries.push(geometry);
    }
-   if(geometries.length){this.collisions.set(key,new CollisionWorld(geometries));for(const g of geometries)g.dispose();}else this.empty.add(key);
+   if(geometries.length){this.collisions.set(key,new CollisionWorld(geometries));for(const g of geometries)g.dispose();}else this.empty.add(key);this.colliderMasks.set(key,asset.mask);
   }
   for(const key of [...this.collisions.keys()])if(!wanted.has(key))this.remove(key);
   for(const key of [...this.empty])if(!wanted.has(key))this.empty.delete(key);
@@ -37,8 +39,8 @@ export class PlayerWorld {
   const ecef=point.clone().applyMatrix4(this.frame.toECEF),normal=ecef.normalize(),spec=this.streamer.committedSpec;
   const lateral=spec.focus.clone().sub(normal.clone().multiplyScalar(spec.focus.dot(normal))).length();
   if(lateral>spec.radius-3)return false;
-  if(spec.cameraView&&lateral>5){
-   // Outside the proven 8 m collision disk, the whole capsule must lie in
+  if(spec.cameraView&&lateral>Math.max(0,(spec.collisionRadius??0)-3)){
+   // Outside an explicitly requested walking disk, the whole capsule must lie in
    // the examined frustum. Off-screen absence is not evidence of empty ground.
    const feet=point.clone().applyMatrix4(this.frame.toECEF),eye=feet.clone().addScaledVector(this.frame.up,1.72);
    if(spec.cameraView.frustum.planes.some(plane=>plane.distanceToPoint(feet)<.28||plane.distanceToPoint(eye)<.28))return false;

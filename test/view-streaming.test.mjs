@@ -12,10 +12,10 @@ const focus=new Vector3(6371010,0,0),node=(path,options={})=>({path,key:path,lea
 function cameraView(){const camera=new PerspectiveCamera(52,1,.1,10000);camera.position.copy(focus).add(new Vector3(100,0,0));camera.up.set(1,0,0);camera.lookAt(focus.clone().add(new Vector3(0,500,0)));camera.updateMatrixWorld();return {position:camera.position.clone(),direction:camera.getWorldDirection(new Vector3()),pixelScale:1000,frustum:new Frustum().setFromProjectionMatrix(new Matrix4().multiplyMatrices(camera.projectionMatrix,camera.matrixWorldInverse))};}
 function source(children,load=payload){return {root:async()=>({radius:6371010,epoch:1}),copyrights:async()=>new Map(),children,loadNode:load,clear(){}};}
 
-test('view traversal fetches ancestors before children and selects mixed depth without exploring subpixel branches',async()=>{
+test('subpixel children are inspected without payload requests and their parent stays selected',async()=>{
  const parent=node('100'),child=node('1000',{metersPerTexel:.01}),behind=node('200',{center:focus.clone().add(new Vector3(0,-500,0))});let descended=false;const loads=[];
  const s=new EarthHQStreaming({source:source(async n=>n.root?[parent,behind]:n.path==='100'?[child]:(descended=true,[]),async n=>{loads.push(n.key);return payload();}),radiusMeters:1000,retainRadiusMeters:1100,screenSpaceError:1});
- try{const c=await s.requestRegion({focusECEF:focus,radiusMeters:1000,cameraView:cameraView()});assert.equal(c.complete,true);assert.equal(c.detailMode,'screen-space');assert.equal(c.requiredLeaves,1);assert.deepEqual([...s.viewCut.keys()],['1000']);assert.equal(descended,false);assert.equal(loads.includes('200'),false);assert.ok(loads.indexOf('100')<loads.indexOf('1000'));s.updateViewMasks();assert.equal(s.assets.get('100').mask,254);}finally{await s.dispose();}
+ try{const c=await s.requestRegion({focusECEF:focus,radiusMeters:1000,cameraView:cameraView()});assert.equal(c.complete,true);assert.equal(c.detailMode,'screen-space');assert.equal(c.requiredLeaves,1);assert.deepEqual([...s.viewCut.keys()],['100']);assert.equal(descended,false);assert.equal(loads.includes('200'),false);assert.deepEqual(loads,['100']);s.updateViewMasks();assert.equal(s.assets.get('100').mask,255);}finally{await s.dispose();}
 });
 
 test('visible view selection can reach actual terminals beyond depth 25 without a hard ceiling',async()=>{
@@ -48,7 +48,7 @@ test('OBB distance and clipping use oriented axes instead of a bounding sphere a
 });
 
 test('descending with unchanged surface focus refreshes the view demand and chooses deeper detail',async()=>{
- const parent=node('100',{metersPerTexel:.5}),child=node('1000',{leaf:true,metersPerTexel:.01});
+ const parent=node('100',{metersPerTexel:1.6}),child=node('1000',{leaf:true,metersPerTexel:.05});
  const s=new EarthHQStreaming({source:source(async n=>n.root?[parent]:[child]),screenSpaceError:1,radiusMeters:1000,retainRadiusMeters:1100});
  const camera=new PerspectiveCamera(52,1,.1,10000);camera.up.set(1,0,0);camera.position.copy(focus).add(new Vector3(2000,0,0));camera.lookAt(parent.center);camera.updateMatrixWorld();
  try{
@@ -93,4 +93,43 @@ test('view score uses forward depth and mesh angular correction with the observe
  assert.equal(meshAngularWeight({min:[0,0,6371000],max:[.001,.001,6371000]},1),0);
  const flat=meshAngularWeight({min:[0,0,6371000],max:[.001,.001,6371000]},20),tall=meshAngularWeight({min:[0,0,6371000],max:[.001,.001,6381000]},20);
  assert.ok(flat>.99);assert.equal(tall,0);
+});
+
+test('metadata descent waits for the resident grandparent while admitting the current payload',async()=>{
+ let release,expandedChild=false;const parent=node('100'),child=node('1000'),leaf=node('10000',{leaf:true});
+ const data=source(async n=>{if(n.root)return [parent];if(n.path===parent.path)return [child];expandedChild=true;return [leaf];},async n=>{if(n.path===parent.path)await new Promise(r=>release=r);return payload();});
+ const s=new EarthHQStreaming({source:data,screenSpaceError:1,radiusMeters:1000,retainRadiusMeters:1100});
+ try{const pending=s.requestRegion({focusECEF:focus,radiusMeters:1000,cameraView:cameraView()});while(!release||!s.assets.has(child.key))await new Promise(r=>setTimeout(r,1));assert.equal(expandedChild,false);release();assert.equal((await pending).complete,true);assert.equal(expandedChild,true);}finally{release?.();await s.dispose();}
+});
+
+test('cancellation settles a metadata stage waiting for a parent mesh and owns its late payload',async()=>{
+ let release;const parent=node('100'),child=node('1000'),data=source(async n=>n.root?[parent]:[child],async n=>{if(n.path===parent.path)await new Promise(r=>release=r);return payload();});
+ const s=new EarthHQStreaming({source:data,screenSpaceError:1,radiusMeters:1000,retainRadiusMeters:1100});
+ const pending=s.requestRegion({focusECEF:focus,radiusMeters:1000,cameraView:cameraView()}).catch(e=>e);
+ while(!release)await new Promise(r=>setTimeout(r,1));const disposal=s.dispose();release();await disposal;assert.equal((await pending).name,'AbortError');assert.equal(s.assets.size,0);
+});
+
+test('raising a budget resumes camera traversal blocked on a required parent mesh',async()=>{
+ const parent=node('100'),child=node('1000'),leaf=node('10000',{leaf:true});
+ const s=new EarthHQStreaming({source:source(async n=>n.root?[parent]:n.path===parent.path?[child]:[leaf]),screenSpaceError:1,radiusMeters:1000,retainRadiusMeters:1100,maxGpuBytes:1});
+ try{assert.equal((await s.requestRegion({focusECEF:focus,radiusMeters:1000,cameraView:cameraView()})).complete,false);s.setGpuBudget(128*1024**2);await new Promise(r=>setTimeout(r,0));assert.equal((await s.waitForIdle()).complete,true);}finally{await s.dispose();}
+});
+
+test('collisions follow visible parent octants instead of retaining invisible coarse surfaces',async()=>{
+ const {PlayerWorld}=await import('../src/demo/PlayerWorld.js'),{localFrame}=await import('../src/geo.js'),{Ray}=await import('three');
+ const frame=localFrame(0,0),n=node('100',{center:focus.clone(),radius:10}),vertices=new Uint8Array(48),points=[[0,0,0],[1,0,0],[0,0,1],[3,0,0],[4,0,0],[3,0,1]];
+ points.forEach((p,i)=>{vertices.set(p,i*8);vertices[i*8+3]=i<3?0:7;});
+ const asset=await buildAsset({matrixGlobeFromMesh:frame.toECEF.toArray(),meshes:[{vertices,indices:new Uint16Array([0,1,2,2,3,3,4,5])}],overlaySurfaceMeshes:[]},n),s=new EarthHQStreaming({source:source(async()=>[])}),world=new PlayerWorld(s);
+ s.wanted.set(n.key,n);s.assets.set(n.key,asset);world.setFrame(frame);world.refresh(new Vector3(),{all:true});const ray=x=>new Ray(new Vector3(x,2,.2),new Vector3(0,-1,0));
+ try{assert.ok(world.rayIntersect(ray(.2)));asset.setMask(254);world.refresh(new Vector3(),{all:true});assert.equal(world.rayIntersect(ray(.2)),false);assert.ok(world.rayIntersect(ray(3.2)));asset.setMask(255);world.refresh(new Vector3(),{all:true});assert.ok(world.rayIntersect(ray(.2)));}finally{world.dispose();await s.dispose();}
+});
+
+
+test('flight elevation retains taller stopped branches while refining neighboring metadata',async()=>{
+ const data=new RocktreeSource(),planet={radius:6371010,epoch:1},normal=new Vector3(1,0,0);
+ const roof=node('1',{leaf:true,center:focus.clone().addScaledVector(normal,500),radius:10});
+ const broad=node('2',{center:focus.clone().addScaledVector(normal,100),radius:300});
+ const low=node('20',{leaf:true,center:focus.clone().addScaledVector(normal,50),radius:10});
+ data.children=async n=>n.root?[roof,broad]:[low];
+ try{assert.equal(await data.surfaceCeiling(normal,planet),510);}finally{data.clear();}
 });

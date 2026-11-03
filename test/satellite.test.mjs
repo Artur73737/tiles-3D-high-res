@@ -21,3 +21,11 @@ test('satellite patches face outward and cannot paint the hidden hemisphere over
  assert.equal(mesh.material.side,FrontSide);assert.ok(normal.dot(a.clone().add(node.center))>0);
  mesh.geometry.dispose();mesh.material.map.dispose();mesh.material.dispose();await s.dispose();
 });
+
+test('satellite parents stop drawing only after every selected child is resident',()=>{
+ const s=new SatelliteLayer(),parent=s.node(3,1,1),children=[s.node(4,2,2),s.node(4,3,2),s.node(4,2,3),s.node(4,3,3)];
+ const record=node=>({node,mesh:{visible:true}});s.needed=new Set([parent,...children].map(n=>n.key));s.resident.set(parent.key,record(parent));
+ for(const child of children.slice(0,3))s.resident.set(child.key,record(child));s.updateVisibility();assert.equal(s.resident.get(parent.key).mesh.visible,true);
+ s.resident.set(children[3].key,record(children[3]));s.updateVisibility();assert.equal(s.resident.get(parent.key).mesh.visible,false);
+ s.resident.delete(children[0].key);s.updateVisibility();assert.equal(s.resident.get(parent.key).mesh.visible,true);s.resident.clear();
+});
