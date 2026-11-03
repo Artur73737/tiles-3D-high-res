@@ -2,18 +2,30 @@ import {Vector3} from 'three';
 import {DecoderPool} from './decoder.js';
 import {planetMetadata,copyrightMetadata} from './protobuf.js';
 import {intersectsColumn} from './geo.js';
-import {TileError} from './errors.js';
+import {TileError,aborted} from './errors.js';
+import {SharedDemand} from './demand.js';
 export class RocktreeSource {
  constructor({transport,baseUrl='https://kh.google.com/rt/earth/',maxParsedMetadata=200}={}){this.transport=transport;this.decoder=new DecoderPool();this.baseUrl=baseUrl.endsWith('/')?baseUrl:baseUrl+'/';this.bulk=new Map();this.maxParsedMetadata=maxParsedMetadata;}
  async root(){const bytes=await this.transport.get(this.baseUrl+'PlanetoidMetadata',{fresh:true});return planetMetadata(bytes);}
  async copyrights(epoch){return copyrightMetadata(await this.transport.get(this.baseUrl+'Copyrights/pb=!1u'+epoch));}
  bulkUrl(path,epoch){return this.baseUrl+'BulkMetadata/pb=!1m2!1s'+path+'!2u'+epoch;}
  nodeUrl(node){return this.baseUrl+'NodeData/pb=!1m2!1s'+node.path+'!2u'+node.epoch+'!2e'+(node.flags&16?1:6)+(node.flags&16?'!3u'+node.imageryEpoch:'')+'!4b0';}
- async loadBulk(path,epoch,{priority}={}){
-  const key=this.bulkUrl(path,epoch);if(this.bulk.has(key)){const value=this.bulk.get(key);if(value.pending||value.expiresAt>Date.now()){this.bulk.delete(key);this.bulk.set(key,value);return value.task;}this.bulk.delete(key);}
-  const entry={pending:true,expiresAt:0,task:null};
-  entry.task=(async()=>{const bytes=await this.transport.get(key,{priority}),payload=await this.decoder.decode(0,bytes);if(payload.headNodePath!==path)throw new TileError('identity_mismatch','Unexpected metadata path',{expected:path,actual:payload.headNodePath});entry.pending=false;entry.expiresAt=this.transport.getExpiry?.(key)??Date.now();return {path,epoch,url:key,payload,records:new Map()};})();
-  this.bulk.set(key,entry);try{const result=await entry.task;while(this.bulk.size>this.maxParsedMetadata)this.bulk.delete(this.bulk.keys().next().value);return result;}catch(error){this.bulk.delete(key);throw error;}
+ loadBulk(path,epoch,{priority,signal}={}){
+  if(signal?.aborted)return Promise.reject(aborted());
+  const key=this.bulkUrl(path,epoch);let entry=this.bulk.get(key);
+  if(entry&&(entry.pending||entry.expiresAt>Date.now())&&!entry.demand.controller.signal.aborted){this.bulk.delete(key);this.bulk.set(key,entry);this.transport.reprioritize?.(key,priority??0);return entry.demand.subscribe(signal);}
+  if(entry)this.bulk.delete(key);
+  entry={pending:true,expiresAt:0,demand:null};
+  const forget=()=>{if(this.bulk.get(key)===entry)this.bulk.delete(key);};
+  entry.demand=new SharedDemand(async requestSignal=>{
+   const bytes=await this.transport.get(key,{priority,signal:requestSignal});if(requestSignal.aborted)throw aborted();
+   const payload=await this.decoder.decode(0,bytes);if(requestSignal.aborted)throw aborted();
+   if(payload.headNodePath!==path)throw new TileError('identity_mismatch','Unexpected metadata path',{expected:path,actual:payload.headNodePath});
+   entry.pending=false;entry.expiresAt=this.transport.getExpiry?.(key)??Date.now();
+   while(this.bulk.size>this.maxParsedMetadata){const oldest=[...this.bulk].find(([,value])=>!value.pending);if(!oldest)break;this.bulk.delete(oldest[0]);}
+   return {path,epoch,url:key,payload,records:new Map()};
+  },{onEmpty:forget,onSettled:()=>{if(entry.demand.error)forget();}});
+  this.bulk.set(key,entry);return entry.demand.subscribe(signal);
  }
  node(bulk,index,path){
   if(bulk.records.has(index))return bulk.records.get(index);
@@ -34,10 +46,10 @@ export class RocktreeSource {
   const children=[];for(let k=0;k<8;k++){const child=bulk.payload.childIndices[8*(index+1)+k];if(child>=0)children.push(this.node(bulk,child,path+k));}
   if(!children.length)throw new TileError('unknown_children','Nonterminal branch without children',{path});return children;
  }
- async surfaceCeiling(normal,planet,{isCurrent=()=>true}={}){
+ async surfaceCeiling(normal,planet,{isCurrent=()=>true,signal}={}){
   let frontier=[{root:true,epoch:planet.epoch}],ceiling=0,settledCeiling=0;
-  while(frontier.length&&isCurrent()){
-   const children=(await Promise.all(frontier.map(node=>this.children(node)))).flat().filter(node=>!node.empty&&intersectsColumn(node,normal,0));
+  while(frontier.length&&isCurrent()&&!signal?.aborted){
+   const children=(await Promise.all(frontier.map(node=>this.children(node,{signal})))).flat().filter(node=>!node.empty&&intersectsColumn(node,normal,0));
    if(!children.length)return ceiling;
    const height=node=>{const r=node.obb?.rotation,e=node.obb?.extents;let extent=node.radius;if(r&&e){extent=0;for(let i=0;i<3;i++)extent+=Math.abs(normal.x*r[i]+normal.y*r[i+3]+normal.z*r[i+6])*e[i];}return node.center.dot(normal)+extent-planet.radius;};
    for(const node of children)if(node.leaf||node.radius<=256)settledCeiling=Math.max(settledCeiling,height(node));
@@ -47,6 +59,6 @@ export class RocktreeSource {
   }
   return Math.max(0,ceiling);
  }
- async loadNode(node,{priority=1}={}){const bytes=await this.transport.get(node.key,{priority});return await this.decoder.decode(1,bytes);}
- clear(){this.bulk.clear();this.decoder.dispose();}
+ async loadNode(node,{priority=1,signal}={}){const bytes=await this.transport.get(node.key,{priority,signal});if(signal?.aborted)throw aborted();const decoded=await this.decoder.decode(1,bytes);if(signal?.aborted)throw aborted();return decoded;}
+ clear(){for(const entry of this.bulk.values())entry.demand.abort();this.bulk.clear();this.decoder.dispose();}
 }

@@ -5,6 +5,7 @@ const root=fileURLToPath(new URL('..',import.meta.url));mkdirSync(root+'/test-re
 const browser=await chromium.launch({executablePath:process.env.BROWSER_EXECUTABLE??'C:/Program Files/Google/Chrome/Application/chrome.exe',headless:true});
 const page=await browser.newPage({viewport:{width:1280,height:800}}),errors=[],report={created:new Date().toISOString(),qaRenderCadence:'~16 fps cap for headless test only'};
 page.on('pageerror',e=>errors.push(e.message));
+page.on('console',message=>{if(/THREE.WebGLProgram|Shader Error|VALIDATE_STATUS/.test(message.text()))errors.push(message.text());});
 await page.addInitScript(()=>{const raf=requestAnimationFrame.bind(window);window.requestAnimationFrame=cb=>raf(()=>setTimeout(()=>cb(performance.now()),50));});
 const watchdog=setTimeout(()=>browser.close(),150000),check=(ok,message)=>{if(!ok)throw Error(message);};
 const snapshot=()=>page.evaluate(()=>{const q=window.__earthDemo,s=q.streamer,c=s.getCoverage(),depths=[...s.viewCut.values()].map(n=>n.path.length);return {state:q.state(),coverage:c,depths:[...new Set(depths)],maxDepth:Math.max(...depths),terminals:[...s.viewCut.values()].filter(n=>n.leaf).length,workers:s.source.decoder.workers.length,drawCalls:q.renderer.info.render.calls,queue:{active:[...s.active.keys()],remaining:s.tileQueue.length-s.tileCursor,dirty:s.viewQualityDirty,decoder:s.source.decoder.queue.length,workerJobs:s.source.decoder.workers.filter(w=>w.job).length,transport:s.transport.jobs.size,missing:[...s.viewCut.keys()].filter(k=>!s.assets.has(k))}};});
@@ -23,6 +24,7 @@ try{
  await page.evaluate(()=>{const q=window.__earthDemo;q.player.place(new q.THREE.Vector3(0,29.3,0));q.player.flying=true;q.look(0,-.18);});
  await page.waitForFunction(old=>{const s=window.__earthDemo.streamer;return s.generation>old&&s.getCoverage().complete;},oldGeneration,{timeout:45000});
  report.ground=await snapshot();check(report.ground.maxDepth>=report.wide.maxDepth&&report.ground.terminals>0,'Low altitude failed to reach terminal geometry');
+ await page.waitForFunction(()=>window.__earthDemo.streamer.getCoverage().transitioning===0,{},{timeout:10000});
  await page.screenshot({path:root+'/test-results/view-ground.png'});
  const generation=await page.evaluate(()=>{const q=window.__earthDemo;q.player.place(new q.THREE.Vector3(0,178,0));q.player.flying=true;q.player.flightMultiplier=16;q.look(0,-.18);return q.streamer.generation;});
  await page.waitForFunction(old=>{const s=window.__earthDemo.streamer;return s.generation>old&&s.getCoverage().complete;},generation,{timeout:45000});

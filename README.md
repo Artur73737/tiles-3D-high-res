@@ -22,7 +22,7 @@ There is no download button. Images refine as you zoom, and 3D terrain streams a
 
 ![Compact navigation, picture, input and streaming controls](docs/previews/controls.png)
 
-These are screenshots of the actual viewer. The flight image shows progressive loading, including parent previews; it does not imply that the entire 2 km area has finished loading at terminal resolution. Imagery and geometry retain their providers' copyrights. The viewer interface is in English.
+These are screenshots of the actual viewer. The flight image shows a completed camera-selected view with mixed detail levels; it does not imply terminal resolution across the entire 2 km disk. Imagery and geometry retain their providers' copyrights. The viewer interface is in English.
 
 ## Build and run
 
@@ -122,7 +122,7 @@ cold refinement: score > -0.2
 payload admission: score >= -1
 ```
 
-The thresholds, projection operations, parent-mesh staging, request comparator, texture request families and 12-worker ceiling were checked against downloaded assets and the running reference renderer. The evidence, artifact hashes, offsets and remaining differences are documented in [Reference client analysis](docs/reference-client-analysis.md). The angular weight is derived from decoded mesh geographic bounds, with a coalesced selection pass after geometry arrives. The code uses direct octant replacement. The original paired fade/unpop rules have been recovered in the report but their final shader behavior is not reproduced here. Parent-metadata borrowing and the complete transport cancellation policy also remain outside the verified implementation. This is not a claim of a complete, unchanged copy of the reference renderer.
+The thresholds, projection operations, parent-mesh staging, request comparator, texture request families and 12-worker ceiling were checked against downloaded assets and the running reference renderer. The evidence, artifact hashes, offsets and remaining differences are documented in [Reference client analysis](docs/reference-client-analysis.md). The angular weight is derived from decoded mesh geographic bounds, with a coalesced selection pass after geometry arrives. The bundle now uses paired parent/child transitions, GPU octant masks, the recovered four-sample sharp texture filter and premultiplied transition output. The transition metric is compared directly with unchanged original WASM function bodies; 1,863 numerical steps match exactly. See [transition reconstruction](docs/transition-analysis.md) and [request cancellation](docs/request-cancellation-analysis.md) for the source boundaries and verification. These tests establish the documented terrain paths, not binary identity with the entire reference application.
 
 A visited metadata node does not automatically become a payload request. Nodes below the admission threshold leave their footprint to an admitted ancestor. Continuing into metadata uses the separate upper threshold; the former permanent `refinedPaths` hysteresis has been removed because the reference's recent-frame exception belongs to active fades, not to metadata visits.
 
@@ -130,11 +130,13 @@ In the observed 3D traversal profile, a node can request its own payload while i
 
 Requests use the recovered lexicographic comparator: traversal mode, request priority, resource flag, decreasing projection score, then payload before metadata for exact ties. The old gaze buckets and fixed payload/metadata burst ratio have been removed. Every node uses its own provider epoch. Imagery-epoch nodes request `!2e1!3u...`; photogrammetric nodes request `!2e6`, matching the observed request families. Browser decoding runs in an embedded pool of up to `min(hardwareConcurrency, 12)` workers. The worker code stays inside the same JS bundle and self-contained HTML.
 
-Each arriving child replaces its own octant of its parent mesh. Other octants remain visible until their children are available. Unknown metadata cannot hide a fallback. Turning preserves resident geometry inside the retention radius, and evicting a child restores the parent portion. Local collision meshes are rebuilt when their visible octant masks change, so a replaced coarse surface cannot remain as an invisible collision wall.
+Terrain shading uses the recovered atmospheric lookup tables and equations: sun/sky illumination, aerial perspective, night tint, exposure and automatic atmosphere fading. The sun follows the original default camera-relative rule; the fade follows camera tilt, field of view and height above available ground, with the original zero-elevation fallback when no ground is loaded. The demo samples its loaded collision surface for that height. The 64×128 floating-point inscatter table is shared per renderer, recomputed only when its inputs change and released with its final material owner. The six original GPU reference cases match with zero maximum table error. See [atmosphere CPU analysis](docs/atmosphere-cpu-analysis.md) for the recovered defaults and [reference analysis](docs/reference-client-analysis.md) for shader provenance and sampled render state. Terrain textures use the observed linear sampling and anisotropy up to 8, limited by the device.
+
+Each arriving child replaces its own octant of its parent mesh through a paired transition. An opaque primary pass keeps coverage while the secondary pass blends; the primary changes at the midpoint. The source metric uses a one-second nominal duration, score-dependent timing, smoothstep and a 1/64 coefficient offset. Fast projected motion selects the current mesh immediately. Vertex masks keep the decoded index buffers immutable, and transition passes share their geometry and textures. Other octants remain visible until their children are available. Unknown metadata cannot hide a fallback. Turning preserves resident geometry inside the retention radius, and evicting a child restores the parent portion. Local collision meshes use the selected octant inventory and are rebuilt when it changes, so a replaced coarse surface cannot remain as an invisible collision wall. Nonempty source layer four disables pairing, matching the decoded original mesh flag. A resident tile re-entering the view is selected immediately; see [transition eligibility](docs/transition-eligibility-analysis.md).
 
 Approaching the surface increases the projection score and continues traversal to the provider's terminal nodes wherever the visible detail requires it. A terminal ground disk is requested only while walking. Flight selection follows the camera. Off-screen missing demand does not establish collision coverage, and flight is no longer stalled by that missing inventory.
 
-Movement and camera changes update selection, including vertical movement, pitch and viewport changes. Short bursts of movement coalesce while useful metadata work finishes; a large direction change can replace demand immediately. Root metadata is refreshed periodically rather than fetched afresh on every small camera movement. Tile metadata and bytes retain HTTP freshness semantics.
+Movement and camera changes update selection, including vertical movement, pitch and viewport changes. In-flight payload priority follows the latest camera. Untouched payloads are canceled after the recovered two-frame grace period; queued obsolete requests are removed, active fetches and retry waits are aborted, and valid completed cache writes retain ownership. Shared metadata/byte requests survive while another caller still needs them. A superseded discovery releases its own subscriptions; late canceled decodes cannot replace current metadata. Short bursts of movement coalesce while useful metadata work finishes; a large direction change can replace demand immediately. Root metadata is refreshed periodically rather than fetched afresh on every small camera movement. Tile metadata and bytes retain HTTP freshness semantics.
 
 Automatic 3D requests start below **2,500 m**, pause above **3,000 m**, and resume on descent. Globe mode explicitly pauses 3D; **Fly 3D** enters flight. The satellite layer continues independently. The old `previewRadiusMeters` option, separate preview collections and preview counters have been removed. Use camera selection for progressive fallback rendering; explicit region requests still provide terminal coverage through the single asset queue.
 
@@ -142,7 +144,7 @@ Automatic 3D requests start below **2,500 m**, pause above **3,000 m**, and resu
 
 `getCoverage().detailMode` distinguishes `screen-space` and `terminal`. In camera mode, `complete` means all selected nodes needed for that view are loaded, including mixed depths. In terminal mode it means every selected terminal leaf is loaded. Moving or zooming can demand finer nodes again. An idle queue or a visible fallback does not establish complete coverage.
 
-`requiredLeaves` and `readyLeaves` retain their API names; in camera mode they count selected nodes, including nonterminal ones. `fallbackFailures` reports failed ancestor previews separately from missing selected nodes. A fallback failure does not poison a view whose selected descendants are ready. Unknown metadata, selected-node failures and capacity exhaustion remain incomplete coverage. These flags describe the provider hierarchy, not the absence of source photogrammetry holes.
+`transitioning` counts active parent/child pairs; `complete` describes data readiness and does not wait for their visual fade to end. `requiredLeaves` and `readyLeaves` retain their API names; in camera mode they count selected nodes, including nonterminal ones. `fallbackFailures` reports failed ancestor previews separately from missing selected nodes. A fallback failure does not poison a view whose selected descendants are ready. Unknown metadata, selected-node failures and capacity exhaustion remain incomplete coverage. These flags describe the provider hierarchy, not the absence of source photogrammetry holes.
 
 A two-kilometre area can contain more than 150,000 terminal tiles. The viewer selects detail for the current pixels and reaches terminal depth as needed while retaining a wide view. It does not download every terminal tile in the entire disk as a prerequisite for rendering.
 
@@ -242,6 +244,18 @@ Without a heading, a region request covers a full disk. `requestRegion({..., wai
 
 Coverage includes `status`, `complete`, `cameraAltitudeMeters`, `requiredLeaves`, `readyLeaves`, `missingLeaves`, `unknownBranches`, `failedLeaves`, `gpuBytes`, `errors`, and network/cache counters. Use `getAttribution()` for runtime map credits. Camera selection is enabled with the constructor option `screenSpaceError: 1`; explicit region calls without `cameraView` continue to request terminal coverage.
 
+### Access decoded 3D meshes
+
+A `tile-load` event exposes `asset.meshes`, the decoded Three.js meshes, and `asset.group`, their georeferenced transform. `asset.descriptor.leaf` identifies an actual provider terminal; there is no synthetic depth cap. `asset.mask` identifies selected octants. The base mesh list excludes temporary transition passes, which share the same buffers. The streamer owns these resources: copy data you need to keep after tile eviction or engine disposal.
+
+```js
+terrain.addEventListener('tile-load', ({ asset }) => {
+  for (const mesh of asset.meshes) {
+    consumeMesh(mesh.geometry, asset.group.matrix, asset.descriptor);
+  }
+});
+```
+
 ### Satellite API
 
 ```js
@@ -300,6 +314,10 @@ npm run test:rotation
 npm run test:automatic
 npm run test:altitude
 npm run test:network
+node test/terrain-rendering.mjs
+node test/atmosphere-rendering.mjs
+# Optional comparison with the explicitly supplied matching reference capture:
+node test/reference-fade.mjs /path/to/earthplugin_web.wasm
 ```
 
 `npm run fixtures` verifies the byte length and SHA-256 from `test/fixtures/manifest.json`, reuses matching local captures and refuses to overwrite mismatching files. If the provider changes or removes a pinned response, acquisition fails explicitly; it does not silently replace a golden fixture. The binary responses are not committed.
@@ -315,28 +333,30 @@ Source tests cover real captured decoding, terminal traversal, unknown metadata,
 
 The network test injects startup, metadata and tile-request failures in Chrome and checks automatic recovery, bounded failure, and a successful second entry into flight. The viewer test checks satellite detail growth, independent layer demand, flight entry and responsive UI. The controls test checks place search, wheel speed, keyboard selection, tabbed settings, dark-theme layout, screen occupancy, walking preparation and camera-view completion in Chrome. The rotation test checks object identity/retention after turning away and back. The automatic/view test checks mixed-depth two-kilometre demand, workers, camera turns, resident retention and deeper terminal selection on descent. The altitude test checks pause/resume while flying and explicit pause in globe mode. Some headless tests cap rendering at approximately 10 fps to control software-rendering cost; the actual viewer has no such cap.
 
-On 2026-11-03, the automatic browser check entered flight in **0.96 s** and completed the initial 1280x800 Rome view in **17.03 s** from navigation. It selected 171 nodes at depths 16–20 and retained all 316 resident tiles through a turn. Descending selected 296 nodes, including 123 actual terminals, at depths 15–22. Synthetic hierarchy tests additionally reach terminal depth 30, establishing that there is no 22/25-level cap. These are camera-dependent mixed-depth views, not terminal coverage of the entire disk. The controls check covers four viewport sizes, search, settings, wheel speed and walking preparation.
+On 2026-11-03, the automatic browser check entered flight in **0.87 s** and completed the initial 1280x800 Rome view in **25.24 s** from navigation. It selected 171 nodes at depths 16–20 and retained all 316 resident tiles through a turn. Descending selected 296 nodes, including 123 actual terminals, at depths 15–22. Synthetic hierarchy tests additionally reach terminal depth 30, establishing that there is no 22/25-level cap. These are camera-dependent mixed-depth views, not terminal coverage of the entire disk. The controls check covers four viewport sizes, search, settings, wheel speed and walking preparation.
 
-A matched comparison against commit `49f8ccf` used a 960x600 viewport, a 2 km viewing distance, detail scale 1 and the same camera position, orientation and 110 m altitude after entry. Each run observed approximately 15 seconds after entry; the headless renderer was capped at 10 fps. Cold and warm runs used isolated browser profiles with persistent cache reuse between the pair:
+A completed-task comparison against commit `806d521` used a 960×600 viewport, 2 km viewing distance, detail scale 1 and the same camera at 110 m altitude. Both versions selected the same 113 nodes (verified by demand-key digest). The current bundle includes the new terrain shader and transitions; the previous version did not. Each pair used a fresh browser profile for the cold run and reused its persistent cache for the warm run. Rendering was capped at 10 fps for this headless measurement. “Data ready” waits for the selected inventory; “Settled” additionally waits for visual transitions to end.
 
-| Cache | Version | Flight entry | Observation elapsed | Requests | CPU seconds | Peak sampled family working set | Peak sampled private bytes |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| Cold | Before | 4.95 s | 19.95 s | 754 | 19.10 | 1,156 MiB | 1,232 MiB |
-| Cold | After | 0.86 s | 15.88 s | 270 | 10.92 | 928 MiB | 905 MiB |
-| Warm | Before | 0.61 s | 15.65 s | 1 | 11.83 | 1,443 MiB | 1,666 MiB |
-| Warm | After | 0.70 s | 15.72 s | 3 | 12.37 | 1,124 MiB | 1,329 MiB |
+| Cache | Version | Flight entry | Data ready | Settled | Requests | CPU seconds | Peak sampled family working set | Peak sampled private bytes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Cold | Before | 1.39 s | 36.00 s | 36.00 s | 270 | 13.32 | 1061 MiB | 1179 MiB |
+| Cold | After | 0.96 s | 45.61 s | 46.68 s | 272 | 14.83 | 1104 MiB | 1221 MiB |
+| Warm | Before | 0.20 s | 1.39 s | 1.39 s | 2 | 6.80 | 1218 MiB | 1422 MiB |
+| Warm | After | 0.19 s | 1.01 s | 2.05 s | 3 | 7.93 | 1376 MiB | 1582 MiB |
 
-Both versions reported their selected view complete at observation end. The corrected admission policy selected 113 nodes with 233 resident assets, versus 212 selected and 695 resident before; this compares selection policies at identical camera settings, not identical downloaded leaf inventories. Cold transferred bytes fell from 37.09 MB to 20.77 MB. Warm cache hits were 753 before and 269 after. Warm entry and CPU did not improve. Entry now uses metadata elevation instead of blocking on a terminal ground disk; walking still prepares ground explicitly.
+Cold transferred bytes were 20.77 MB in both versions. The current cold run had two 15-second response timeouts, followed by successful automatic retries; the previous cold run's slowest request took 10.62 seconds. The measured median request durations were 1.51 seconds after and 1.69 seconds before. These network timings explain a concrete source of delay, not every difference in elapsed time. A preceding matched run measured 23.92 seconds before and 45.05 seconds after for data readiness. The new shader and paired rendering also add CPU and geometry storage. This change does **not** establish a cold-load speedup. Warm data readiness improved in this sample, while the original-style fade deliberately adds approximately one second before visual settlement.
 
-CPU includes the dedicated Chrome process family. The observation timer can overrun while the browser is busy. Memory samples can miss short-lived peaks, working sets can double-count shared pages, and harness/PowerShell overhead is excluded. Agent token usage was not measured. Live network results vary; these measurements do not establish a universal loading speed. The benchmark preceded the final collision-mask, elevation-bound and budget-recovery fixes, which were checked separately by source and browser tests.
+The browser tests passed with 76 source tests, the four network-recovery scenarios, automatic flight/turn/descent/retention, controls at four viewport sizes, GPU octant/blending checks, six atmospheric GPU reference cases and 1,863 direct fade-metric comparisons. The network-recovery run preceded the final atmosphere changes; the final shader and control checks ran afterward. An initial concurrent browser run timed out; isolated profiling and the completed automatic run passed. The profiling sample used 1.24 renderer task CPU seconds over 12.69 elapsed seconds while requests continued to complete.
 
-Reproduce the matched observation after building each version, using a distinct label for each:
+CPU includes the dedicated Chrome process family. Memory samples can miss short-lived peaks, working sets can double-count shared pages, and harness/PowerShell overhead is excluded. Agent token usage was not measured. Live network and GPU results vary; no universal loading-time guarantee is implied. Reports retain artifact SHA-256s, selected-key digests, network timing summaries and the slowest request URLs.
+
+Reproduce a completed-view comparison after building each version, using a distinct label for each:
 
 ```sh
-node test/performance.mjs view-current globo-hq.html 2000 15 110
+node test/performance.mjs view-current globo-hq.html 2000 0 110
 ```
 
-Ignored JSON reports and screenshots live under `test-results/`. The source asset analysis and measured live settings remain in the linked reference report. `test/performance.mjs` also supports a completed 50 m terminal-region benchmark when the observation duration is omitted. `test/profile.mjs` is a local profiling helper.
+Ignored JSON reports and screenshots live under `test-results/`. Passing `15` instead of `0` selects a fixed 15-second observation without waiting for completion. `test/performance.mjs` also supports a completed 50 m terminal-region benchmark when the view arguments are omitted. `test/profile.mjs` is a bounded local profiling helper.
 
 ## Source layout
 
@@ -345,7 +365,11 @@ src/index.js              Public bundle exports
 src/satellite.js          Raster selection, requests, meshes and image lifetime
 src/streamer.js           Unified 3D traversal, admission, capacity and asset lifetime
 src/source.js             Rocktree metadata traversal and payload loading
-src/transport.js          Deduplicated, prioritized, bounded byte requests
+src/transport.js          Deduplicated, prioritized, cancellable byte requests
+src/demand.js             Shared request subscriptions and cancellation ownership
+src/transitions.js        Source-matched fade metric and paired selection
+src/terrain-material.js   GPU octant masks, sharp texture filter and unpop passes
+src/terrain-atmosphere.js Original terrain atmosphere equations and shared GPU tables
 src/cache.js              RAM and IndexedDB caches
 src/protobuf.js           Metadata parsing
 src/geometry.js           Octant masks, asset construction and disposal

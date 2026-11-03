@@ -24,7 +24,7 @@ const satellite=new SatelliteLayer({renderer,radius:6370890});scene.add(satellit
 const streamer=new EarthHQStreaming({renderer,radiusMeters:visibility,retainRadiusMeters:visibility*1.15,activationAltitudeMeters,screenSpaceError:1,maxGpuBytes:4*1024**3,cacheBytes:1024**3,cacheName:qa?'earth-hq-demo-test-v1':'earth-hq-cache-v1'});scene.add(streamer.group);
 const world=new PlayerWorld(streamer),input=new SprintInput(),clock=new THREE.Clock();
 const preferences={speed:1,sensitivity:1,invert:false,crosshair:true,satellite:true};
-let walkingPreparation=false;
+let walkingPreparation=false,navigationController=null;
 let player=null,frame=null,mode='loading',locked=false,yaw=0,pitch=.08,navToken=0,lastHud=0,lastToast=0,error=null,booting=false;
 // Drag the actual surface point under the cursor, with no velocity or inertia.
 const dragRay=new THREE.Raycaster(),dragSphere=new THREE.Sphere(new THREE.Vector3(),globe.geometry.parameters.radius);
@@ -61,7 +61,7 @@ function streamView(focus){
  streamer.update(camera,{focusECEF:focus,radiusMeters:visibility,viewDirectionECEF:direction.lengthSq()>1e-10?direction:null,viewHalfAngle:halfAngle,nearRadiusMeters:Math.min(60,visibility),collisionRadiusMeters:mode==='player'&&!player.flying?12:0});
 }
 async function enterAt(latitude,longitude){
- endGlobeDrag();const token=++navToken;
+ endGlobeDrag();navigationController?.abort();navigationController=new AbortController();const token=++navToken;
  try{
  if(!Number.isFinite(latitude)||latitude< -90||latitude>90||!Number.isFinite(longitude))throw Error('Invalid coordinates.');
  longitude=((longitude+180)%360+360)%360-180;walkingPreparation=false;mode='loading';booting=true;error=null;input.reset();document.exitPointerLock();controls.enabled=false;$('error').hidden=true;locationSearch.close();
@@ -71,8 +71,8 @@ async function enterAt(latitude,longitude){
  camera.position.copy(target).addScaledVector(frame.up,100).addScaledVector(frame.south,70);camera.up.copy(frame.up);camera.lookAt(target);
  // Resolve only local metadata for a safe camera elevation. No terminal
  // disk, payload download, or collision inventory gates flight entry.
- const ceiling=await streamer.source.surfaceCeiling(frame.up,planet,{isCurrent:()=>token===navToken});if(token!==navToken)return;
- world.setFrame(frame);
+ const ceiling=await streamer.source.surfaceCeiling(frame.up,planet,{isCurrent:()=>token===navToken,signal:navigationController.signal});if(token!==navToken)return;
+ world.setFrame(frame);streamer.group.userData.atmosphere={groundRadius:planet.radius};
  player=new Explorer(world,{min:[-Infinity,-10000,-Infinity],max:[Infinity,10000,Infinity]});player.place(new THREE.Vector3(0,ceiling+80,0));player.spawn.copy(player.feet);player.safe.copy(player.feet);player.flying=true;player.flightMultiplier=preferences.speed;player.grounded=false;yaw=0;pitch=-.18;mode='player';booting=false;streamer.setEnabled(true);scene.background=new THREE.Color(0xbacfdc);applyPlayerCamera();streamView(player.feet.applyMatrix4(frame.toECEF));
  }catch(e){if(token!==navToken)return;globeView();showError(e);}
 }
@@ -86,7 +86,7 @@ async function startWalking(){
   world.refresh(feet,{all:true});player.findSpawn(feet);world.dirty=true;
  }catch(error){if(token===navToken)showError(error);}finally{if(token===navToken)walkingPreparation=false;}
 }
-function globeView(){walkingPreparation=false;endGlobeDrag();navToken++;booting=false;mode='globe';streamer.group.visible=false;streamer.setEnabled(false);input.reset();document.exitPointerLock();scene.background=new THREE.Color(0x070f1d);const direction=frame?frame.up:camera.position.clone().normalize();camera.position.copy(direction).multiplyScalar((streamer.planet?.radius??6371010)*2.6);camera.up.set(0,0,1);camera.lookAt(0,0,0);controls.target.set(0,0,0);controls.enabled=true;controls.update();}
+function globeView(){navigationController?.abort();walkingPreparation=false;endGlobeDrag();navToken++;booting=false;mode='globe';streamer.group.visible=false;streamer.setEnabled(false);input.reset();document.exitPointerLock();scene.background=new THREE.Color(0x070f1d);const direction=frame?frame.up:camera.position.clone().normalize();camera.position.copy(direction).multiplyScalar((streamer.planet?.radius??6371010)*2.6);camera.up.set(0,0,1);camera.lookAt(0,0,0);controls.target.set(0,0,0);controls.enabled=true;controls.update();}
 function rebase(){
  const feetECEF=player.feet.applyMatrix4(frame.toECEF),location=ecefToGeo(feetECEF,streamer.planet.radius),newFrame=localFrame(location.latitude,location.longitude,streamer.planet.radius);
  const rotation=new THREE.Quaternion().setFromRotationMatrix(newFrame.toECEF).invert().multiply(camera.quaternion),angles=new THREE.Euler().setFromQuaternion(rotation,'YXZ');yaw=angles.y;pitch=angles.x;
@@ -183,7 +183,9 @@ function animate(){
  }
  if(preferences.satellite&&(mode==='globe'||mode==='player'))satellite.update(camera);
  renderer.render(scene,camera);
- if(performance.now()-lastHud>250){lastHud=performance.now();const c=streamer.getCoverage(),point=mode==='player'?player.feet.applyMatrix4(frame.toECEF):camera.position,geo=ecefToGeo(point);
+ if(performance.now()-lastHud>250){lastHud=performance.now();
+  if(mode==='player'){const feet=player.feet,ground=player.ground(feet.x,feet.z),radius=streamer.planet.radius;streamer.group.userData.atmosphere.groundRadius=ground?Math.max(radius,ground.applyMatrix4(frame.toECEF).length()):radius;}
+  const c=streamer.getCoverage(),point=mode==='player'?player.feet.applyMatrix4(frame.toECEF):camera.position,geo=ecefToGeo(point);
   syncSettings(c);
   $('mode').textContent=walkingPreparation?'GROUND':mode==='player'?player.flying?'FLIGHT':input.keys.sprint?'SPRINT':'WALK':mode==='loading'?'LOADING':'GLOBE';
   $('speed').hidden=mode!=='player'||!player.flying;

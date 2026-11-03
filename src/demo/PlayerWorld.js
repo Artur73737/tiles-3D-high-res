@@ -21,11 +21,11 @@ export class PlayerWorld {
    wanted.add(key);if(this.colliderMasks.get(key)===asset.mask&&(this.collisions.has(key)||this.empty.has(key)))continue;this.remove(key);
    if(!all&&performance.now()-begin>5){remaining=true;continue;}
    const transform=new Matrix4().multiplyMatrices(this.frame.fromECEF,asset.group.matrix),geometries=[];
-   for(const mesh of asset.group.children){
+   for(const mesh of asset.meshes??asset.group.children){
     if(mesh.geometry.drawRange.count===0)continue;
     const source=mesh.geometry.attributes.position,p=new Float32Array(source.count*3),v=new Vector3();
     for(let i=0;i<source.count;i++){v.fromBufferAttribute(source,i).applyMatrix4(transform);v.toArray(p,i*3);}
-    const geometry=new BufferGeometry();geometry.setAttribute('position',new BufferAttribute(p,3));geometry.setIndex(new BufferAttribute(mesh.geometry.index.array.slice(0,mesh.geometry.drawRange.count),1));geometries.push(geometry);
+    const geometry=new BufferGeometry();geometry.setAttribute('position',new BufferAttribute(p,3));const octants=mesh.geometry.userData.octants;geometry.setIndex(octants?octants.flatMap((values,i)=>asset.mask&(1<<i)?Array.from(values):[]):new BufferAttribute(mesh.geometry.index.array.slice(0,mesh.geometry.drawRange.count),1));geometries.push(geometry);
    }
    if(geometries.length){this.collisions.set(key,new CollisionWorld(geometries));for(const g of geometries)g.dispose();}else this.empty.add(key);this.colliderMasks.set(key,asset.mask);
   }

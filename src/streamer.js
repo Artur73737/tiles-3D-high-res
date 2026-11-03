@@ -5,6 +5,7 @@ import {RocktreeSource} from './source.js';
 import {buildAsset,disposeAsset} from './geometry.js';
 import {intersectsRegion,intersectsColumn,geoToECEF,nearestNodePoint,nodeInFrustum} from './geo.js';
 import {TileError,isAbort,aborted} from './errors.js';
+import {TileFade} from './transitions.js';
 const cpuTurn=()=>new Promise(resolve=>setTimeout(resolve,0));
 function viewDirection(focus,value){
  if(!value)return null;
@@ -19,7 +20,7 @@ export class EarthHQStreaming extends EventDispatcher {
   if(!Number.isFinite(activationAltitudeMeters)||activationAltitudeMeters<=0||!Number.isFinite(altitudeHysteresisMeters)||altitudeHysteresisMeters<0)throw new TileError('invalid_options','Invalid automatic streaming altitude');
   if(!Number.isFinite(screenSpaceError)||screenSpaceError<0)throw new TileError('invalid_options','Invalid screen-space error');
   this.screenSpaceError=screenSpaceError;this.cameraView=null;this.viewTree=new Map();this.viewChildren=new Map();this.viewCut=null;this.collisionInventory=null;this.viewMaskDirty=false;this.viewQualityDirty=false;
-  this.capacityBlocked=false;this.localDiscoveryReady=false;
+  this.capacityBlocked=false;this.localDiscoveryReady=false;this.payloadControllers=new Map();this.discoveryController=null;this.renderFrame=0;
   this.activationAltitudeMeters=activationAltitudeMeters;this.altitudeHysteresisMeters=altitudeHysteresisMeters;this.altitudePaused=true;this.cameraAltitudeMeters=null;
   this.renderer=renderer;this.group=new Group();this.group.name='Earth HQ streaming';this.radiusMeters=radiusMeters;this.retainRadiusMeters=retainRadiusMeters;this.maxGpuBytes=maxGpuBytes;this.concurrency=concurrency;
   this.ownsCache=!cache&&!source;this.cache=cache??(!source?new ResilientByteCache({name:cacheName,maxBytes:cacheBytes}):null);
@@ -29,7 +30,7 @@ export class EarthHQStreaming extends EventDispatcher {
  async start(){
   if(this.disposed)throw aborted();
   if(!this.initializing)this.initializing=(async()=>{
-   const planet=await this.source.root();if(this.disposed)throw aborted();this.planet=planet;this.rootReadAt=Date.now();
+   const planet=await this.source.root();if(this.disposed)throw aborted();this.planet=planet;this.group.userData.planetRadius=planet.radius;this.rootReadAt=Date.now();
    try{const credits=await this.source.copyrights(planet.epoch);if(this.disposed)throw aborted();this.credits=credits;}catch(error){if(isAbort(error))throw error;this.dispatchEvent({type:'warning',error,phase:'attribution'});}
    return planet;
   })().catch(error=>{this.initializing=null;throw error;});
@@ -37,34 +38,37 @@ export class EarthHQStreaming extends EventDispatcher {
  }
  async requestRegion({latitude,longitude,focusECEF,radiusMeters=this.radiusMeters,viewDirectionECEF,viewHalfAngle=Math.PI,nearRadiusMeters=60,collisionRadiusMeters=0,waitForCompletion=true,cameraView=null}={}){
   if(!focusECEF&&(!Number.isFinite(latitude)||latitude< -90||latitude>90||!Number.isFinite(longitude)))throw new TileError('invalid_focus','Latitude or longitude invalid');
-  const generation=++this.generation;
+  const generation=++this.generation;this.discoveryController?.abort();
   await this.start();if(this.disposed)throw aborted();if(generation!==this.generation)return this.getCoverage();if(!Number.isFinite(radiusMeters)||!(radiusMeters>0))throw new TileError('invalid_options','HQ radius must be finite and positive');
   const focus=focusECEF?new Vector3().copy(focusECEF):geoToECEF(latitude,longitude,0,this.planet.radius);
   if(![focus.x,focus.y,focus.z].every(Number.isFinite)||focus.lengthSq()===0)throw new TileError('invalid_focus','Invalid globe focus');
   const normal=focus.clone().normalize(),direction=viewDirection(focus,viewDirectionECEF);
   if(!Number.isFinite(viewHalfAngle)||viewHalfAngle<=0||viewHalfAngle>Math.PI||!Number.isFinite(nearRadiusMeters)||nearRadiusMeters<0||!Number.isFinite(collisionRadiusMeters)||collisionRadiusMeters<0)throw new TileError('invalid_options','Invalid view angle or near radius');
   this.enabled=true;this.altitudePaused=false;
-  const spec={cameraView,focus:focus.normalize().multiplyScalar(this.planet.radius),normal,radius:radiusMeters,viewDirection:direction,viewHalfAngle,nearRadius:nearRadiusMeters,collisionRadius:collisionRadiusMeters,generation,at:Date.now()};this.lastSpec=spec;this.pendingSpec=spec;this.discovering=true;this.localDiscoveryReady=false;this.discoveryError=null;this.failed.clear();this.capacityBlocked=false;this.publish();this.pumpDiscovery();return waitForCompletion?this.waitForIdle():this.getCoverage();
+  const spec={cameraView,focus:focus.normalize().multiplyScalar(this.planet.radius),normal,radius:radiusMeters,viewDirection:direction,viewHalfAngle,nearRadius:nearRadiusMeters,collisionRadius:collisionRadiusMeters,generation,at:Date.now()};this.lastSpec=spec;this.currentDemand=spec;this.pendingSpec=spec;this.discovering=true;this.localDiscoveryReady=false;this.discoveryError=null;this.failed.clear();this.capacityBlocked=false;this.publish();this.pumpDiscovery();return waitForCompletion?this.waitForIdle():this.getCoverage();
  }
  update(camera,{focusECEF,radiusMeters=this.radiusMeters,viewDirectionECEF,viewHalfAngle=Math.PI,nearRadiusMeters=60,collisionRadiusMeters=0}={}){
   if(this.disposed||!this.enabled||!this.planet)return;
+  const previousView=this.cameraView;
   this.group.updateWorldMatrix(true,false);
   const inverse=new Matrix4().copy(this.group.matrixWorld).invert();
   const position=camera.getWorldPosition(new Vector3()).applyMatrix4(inverse);
   if(this.screenSpaceError>0){
    camera.updateMatrixWorld(true);const projection=new Matrix4().multiplyMatrices(camera.projectionMatrix,camera.matrixWorldInverse).multiply(this.group.matrixWorld);
    const width=this.renderer?.getDrawingBufferSize(new Vector2()).x??1080*camera.aspect;
-   this.cameraView={position:position.clone(),direction:camera.getWorldDirection(new Vector3()).transformDirection(inverse),frustum:new Frustum().setFromProjectionMatrix(projection),pixelScale:width*camera.projectionMatrix.elements[0]/2};
+   this.cameraView={projection,position:position.clone(),direction:camera.getWorldDirection(new Vector3()).transformDirection(inverse),frustum:new Frustum().setFromProjectionMatrix(projection),pixelScale:width*camera.projectionMatrix.elements[0]/2};
   }
-  if(this.viewMaskDirty)this.updateViewMasks();
+  this.renderFrame++;const renderChanged=this.transitionsDirty||this.viewMaskDirty||this.renderQuality!==this.screenSpaceError||!previousView||this.cameraView&&(!previousView.position.equals(this.cameraView.position)||!previousView.direction.equals(this.cameraView.direction)||previousView.pixelScale!==this.cameraView.pixelScale);
+  if(this.viewMaskDirty)this.updateViewMasks();if(this.cameraView?.projection&&(renderChanged||this.transitioning)){this.updateTransitions(performance.now()/1000);this.renderQuality=this.screenSpaceError;}
   if(![position.x,position.y,position.z].every(Number.isFinite)||position.lengthSq()===0)return;
   this.cameraAltitudeMeters=position.length()-this.planet.radius;
   const paused=this.cameraAltitudeMeters>this.activationAltitudeMeters+(this.altitudePaused?0:this.altitudeHysteresisMeters);
-  if(paused){if(!this.altitudePaused){this.altitudePaused=true;this.generation++;this.pendingSpec=null;this.discovering=false;this.publish();}return;}
+  if(paused){if(!this.altitudePaused){this.altitudePaused=true;this.cancelRequests();this.generation++;this.pendingSpec=null;this.discovering=false;this.publish();}return;}
   const resumed=this.altitudePaused;this.altitudePaused=false;
   const focus=focusECEF?new Vector3().copy(focusECEF):position;
   if(focus.lengthSq()===0)return;focus.normalize().multiplyScalar(this.planet.radius);
   const direction=viewDirection(focus,viewDirectionECEF);
+  this.updateRequestDemand({focus,normal:focus.clone().normalize(),radius:radiusMeters,collisionRadius:collisionRadiusMeters,cameraView:this.cameraView});
   const viewMoved=this.cameraView&&this.lastSpec?.cameraView&&(position.distanceTo(this.lastSpec.cameraView.position)>Math.max(.5,Math.min(10,Math.abs(this.cameraAltitudeMeters)*.05))||Math.abs(this.cameraView.pixelScale/this.lastSpec.cameraView.pixelScale-1)>.05);
   const pitched=this.cameraView&&this.lastSpec?.cameraView&&this.cameraView.direction.dot(this.lastSpec.cameraView.direction)<Math.cos(Math.PI/30);
   const turned=direction&&(!this.lastSpec?.viewDirection||direction.dot(this.lastSpec.viewDirection)<Math.cos(Math.PI/30));
@@ -76,7 +80,7 @@ export class EarthHQStreaming extends EventDispatcher {
  async pumpDiscovery(){
   if(this.discovery||this.disposed)return;
   this.discovery=(async()=>{
-   while(this.pendingSpec&&!this.disposed){const spec=this.pendingSpec;this.pendingSpec=null;
+   while(this.pendingSpec&&!this.disposed){const spec=this.pendingSpec;this.pendingSpec=null;this.discoveryController=spec.controller=new AbortController();
     try{
      if(this.queryCount++>0&&(!spec.cameraView||Date.now()-this.rootReadAt>=60000)){this.planet=await this.source.root();this.rootReadAt=Date.now();}
      if(spec.cameraView){await this.discoverView(spec);continue;}
@@ -108,7 +112,7 @@ export class EarthHQStreaming extends EventDispatcher {
    // A subpixel child cannot become payload demand merely because we visited it.
    const admit=collision||node.path.length<3||!Number.isFinite(score)||score>=-1;
    if(node.hasData&&admit){wanted.set(node.key,node);if(this.assets.has(node.key))this.readyCount++;this.tileQueue.push(node);this.pumpTiles();}
-   const refine=collision||node.path.length<3||score>-.2;
+   const refine=collision||node.path.length<3||score>-.2||this.assets.get(node.key)?.fade?.dependencyFrame===this.renderFrame-1;
    if(node.leaf||node.hasData&&Number.isFinite(score)&&!refine)return false;
    return true;
   },(parent,children)=>{this.viewChildren.set(parent.path,children.map(child=>child.path));for(const child of children)tree.set(child.path,child);},(a,b)=>this.comparePriority(a,b,spec),async node=>{
@@ -116,7 +120,7 @@ export class EarthHQStreaming extends EventDispatcher {
    // The active 3D traverser admits the current payload independently, but
    // expands its metadata only when its data-bearing parent mesh is resident.
    if(parent?.hasData&&!this.assets.has(parent.key))await this.waitForMesh(parent.key,spec.generation);
-   return this.source.children(node,{priority:node.root?undefined:this.requestPriority(node,spec,false)});
+   return this.source.children(node,{signal:spec.controller.signal,priority:node.root?undefined:this.requestPriority(node,spec,false)});
   });
   if(this.disposed||spec.generation!==this.generation)return;
   // Keep a parent in the display frontier for child octants that did not
@@ -133,7 +137,7 @@ export class EarthHQStreaming extends EventDispatcher {
   this.sortTileQueue(spec);this.viewMaskDirty=true;this.updateViewMasks();this.pumpTiles();this.publish();
  }
  updateViewMasks(){
-  if(!this.viewCut)return;this.viewMaskDirty=false;
+  if(!this.viewCut)return;this.viewMaskDirty=false;this.transitionsDirty=true;
   const byPath=new Map([...this.assets.values()].map(asset=>[asset.descriptor.path,asset]));
   // Known empty octants also cover their parent's footprint. Unknown metadata
   // cannot retire a fallback. Each direct child replaces only its own octant.
@@ -150,6 +154,48 @@ export class EarthHQStreaming extends EventDispatcher {
    let mask=255;for(let octant=0;octant<8;octant++)if(complete(asset.descriptor.path+octant))mask&=~(1<<octant);
    asset.setMask?.(mask);
   }
+ }
+ updateTransitions(now){
+  if(!this.viewCut||!this.cameraView)return;
+  const view=this.cameraView,byPath=new Map([...this.assets.values()].map(asset=>[asset.descriptor.path,asset]));
+  const active=new Map(),scores=new Map(),plans=new Map(),residentReentries=new Set();let transitioning=0;
+  // A traversal is skipped only while selection inputs remain unchanged. Count
+  // actual selection traversals so that an idle view preserves its spatial state.
+  const traversal=this.transitionTraversal=(this.transitionTraversal??0)+1;
+  for(const [path,asset]of byPath){
+   const node=asset.descriptor,score=viewDetailScore(node,view,asset.angularWeight,this.screenSpaceError);scores.set(path,score);
+   const spatial=intersectsColumn(node,this.currentDemand.normal,this.currentDemand.radius)&&nodeInFrustum(node,view.frustum);
+   // Reference state 30207/32997: a resident mesh returning from outside on
+   // consecutive traversals is selected immediately. Newly arrived meshes fade.
+   if(asset.selectionTraversal===traversal-1&&asset.selectionSpatial===false&&spatial)residentReentries.add(path);
+   asset.selectionTraversal=traversal;asset.selectionSpatial=spatial;
+   const alpha=asset.fade?.alpha??0;
+   const fading=spatial&&alpha>0&&(alpha<1?score>=-3:score>Math.fround(-1-Math.fround(.2)));
+   if(this.payloadInView(node,{...this.currentDemand,cameraView:view})||fading)active.set(path,asset);
+   plans.set(path,[]);
+  }
+  const covered=new Map(),complete=path=>{
+   if(covered.has(path))return covered.get(path);
+   if(active.has(path)||this.viewTree.get(path)?.empty)return true;
+   const children=this.viewChildren.get(path),result=!!children?.length&&children.every(complete);covered.set(path,result);return result;
+  };
+  const add=(path,pass)=>{if(pass.mask)plans.get(path)?.push(pass);};
+  for(const [path,asset]of active){
+   let mask=asset.nonEmptyOctants??255;for(let octant=0;octant<8;octant++)if(complete(path+octant))mask&=~(1<<octant);
+   asset.mask=mask;
+   if(!mask)continue;
+   const parent=active.get(path.slice(0,-1)),bit=1<<Number(path.at(-1)),fade=asset.fade??(asset.fade=new TileFade());
+   if(!parent||asset.fadeEligible===false||residentReentries.has(path)||!((parent.nonEmptyOctants??255)&bit)||!nodeInFrustum(asset.descriptor,view.frustum)){
+    fade.reset(true);fade.point=null;add(path,{id:path,mask,opacity:1,secondary:false});continue;
+   }
+   const point=asset.descriptor.center.clone().applyMatrix4(view.projection);
+   const pair=fade.pair(scores.get(path),now,{x:Math.fround(point.x),y:Math.fround(point.y)},this.renderFrame);
+   const parentPath=parent.descriptor.path;
+   if(pair.current)add(path,{id:path,mask,opacity:1,secondary:false});else add(parentPath,{id:path,mask:bit,opacity:1,secondary:false});
+   if(pair.blend){transitioning++;parent.fade??=new TileFade();parent.fade.dependencyFrame=this.renderFrame;add(pair.current?parentPath:path,{id:path,mask:pair.current?bit:mask,opacity:pair.blend,secondary:true});}
+  }
+  for(const [path,asset]of byPath){if(!active.has(path))asset.mask=0;asset.setRenderPasses?.(plans.get(path));}
+  this.transitioning=transitioning;this.transitionsDirty=false;
  }
  waitForMesh(key,generation){
   if(this.assets.has(key))return Promise.resolve();
@@ -188,7 +234,7 @@ export class EarthHQStreaming extends EventDispatcher {
    if(!node.root&&!intersectsRegion(node,spec))return false;
    if(node.leaf){if(node.hasData)desired.set(node.key,node);return false;}
    return true;
-  });return {desired,empty};
+  },undefined,undefined,node=>this.source.children(node,{signal:spec.controller.signal}));return {desired,empty};
  }
  evictOutside(spec){
   for(const [key,asset]of this.assets){
@@ -213,19 +259,36 @@ export class EarthHQStreaming extends EventDispatcher {
   if(this.disposed||!this.enabled||this.altitudePaused||this.capacityBlocked||this.discovering&&!this.localDiscoveryReady)return;
   while(this.active.size<this.concurrency){
    const node=this.nextTile();if(!node)break;
-   const task=this.loadTile(node).finally(()=>{this.active.delete(node.key);this.pumpTiles();this.publish();});this.active.set(node.key,task);
+   const task=this.loadTile(node).finally(()=>{this.active.delete(node.key);if(this.enabled&&!this.altitudePaused&&!this.disposed&&!this.capacityBlocked&&this.wanted.has(node.key)&&!this.assets.has(node.key)&&!this.failed.has(node.key)&&this.payloadInView(node,this.currentDemand??this.lastSpec))this.tileQueue.push(this.wanted.get(node.key));this.pumpTiles();this.publish();});this.active.set(node.key,task);
   }
  }
+ payloadInView(node,spec){
+  if(!spec?.cameraView)return !spec||intersectsRegion(node,spec);
+  if(spec.collisionRadius>0&&intersectsColumn(node,spec.normal,spec.collisionRadius))return true;
+  if(!intersectsColumn(node,spec.normal,spec.radius)||!nodeInFrustum(node,spec.cameraView.frustum))return false;
+  const score=viewDetailScore(node,spec.cameraView,this.assets.get(node.key)?.angularWeight??0,this.screenSpaceError);
+  return node.path.length<3||score>=-1;
+ }
+ updateRequestDemand(spec){
+  this.currentDemand=spec;if(!spec.cameraView)return;
+  for(const [key,request]of this.payloadControllers){
+   if(this.payloadInView(request.node,spec)){
+    request.lastTouch=this.renderFrame;this.transport.reprioritize?.(key,this.requestPriority(request.node,spec));
+   }else if(request.lastTouch<this.renderFrame-2)request.controller.abort();
+  }
+ }
+ cancelRequests(){this.discoveryController?.abort();for(const {controller}of this.payloadControllers.values())controller.abort();}
  async loadTile(node){
-  let asset;
+  let asset;const controller=new AbortController(),signal=controller.signal;this.payloadControllers.set(node.key,{controller,node,lastTouch:this.renderFrame});
   try{
-   const decoded=await this.source.loadNode(node,{priority:this.lastSpec?this.requestPriority(node,this.lastSpec):undefined});if(this.disposed||!this.enabled||this.altitudePaused)return;
-   await cpuTurn();if(this.disposed||!this.enabled||this.altitudePaused)return;
+   const decoded=await this.source.loadNode(node,{signal,priority:this.lastSpec?this.requestPriority(node,this.lastSpec):undefined});if(this.disposed||!this.enabled||this.altitudePaused||signal.aborted)return;
+   await cpuTurn();if(this.disposed||!this.enabled||this.altitudePaused||signal.aborted)return;
    asset=await buildAsset(decoded,node,this.renderer);
-   if(this.disposed||!this.enabled||this.altitudePaused||!this.wanted.has(node.key)){disposeAsset(asset);return;}
+   if(this.disposed||!this.enabled||this.altitudePaused||signal.aborted||!this.wanted.has(node.key)){disposeAsset(asset);return;}
    if(this.gpuBytes+asset.gpuBytes>this.maxGpuBytes)for(const key of this.assets.keys()){if(!this.wanted.has(key))this.unload(key);if(this.gpuBytes+asset.gpuBytes<=this.maxGpuBytes)break;}
    if(this.gpuBytes+asset.gpuBytes>this.maxGpuBytes){this.capacityBlocked=true;throw new TileError('gpu_budget','GPU budget cannot hold every requested HQ leaf',{path:node.path,budget:this.maxGpuBytes,requiredNext:this.gpuBytes+asset.gpuBytes});}
-   asset.expiresAt=this.transport.getExpiry?.(node.key)??Infinity;asset.rootEpoch=this.planet.epoch;
+   for(const mesh of asset.meshes)mesh.userData.planetRoot=this.group;
+   asset.fade=new TileFade();asset.expiresAt=this.transport.getExpiry?.(node.key)??Infinity;asset.rootEpoch=this.planet.epoch;
    this.assets.set(node.key,asset);if(this.viewCut&&!node.leaf&&asset.angularWeight>0)this.viewQualityDirty=true;this.readyCount++;
    for(const id of asset.copyrightIds)this.creditCounts.set(id,(this.creditCounts.get(id)??0)+1);this.group.add(asset.group);this.gpuBytes+=asset.gpuBytes;this.viewMaskDirty=true;this.dispatchEvent({type:'tile-load',asset});
   }catch(error){
@@ -233,7 +296,7 @@ export class EarthHQStreaming extends EventDispatcher {
    if(this.disposed||isAbort(error)||!this.wanted.has(node.key))return;
    this.failed.set(node.key,error);const fallback=this.viewCut&&!this.viewCut.has(node.key);
    this.dispatchEvent({type:fallback?'warning':'error',error,phase:fallback?'fallback':'tile',node});
-  }
+  }finally{if(this.payloadControllers.get(node.key)?.controller===controller)this.payloadControllers.delete(node.key);}
  }
  unload(key){
   const asset=this.assets.get(key);if(!asset)return;this.dispatchEvent({type:'tile-unload',asset});this.assets.delete(key);
@@ -245,7 +308,7 @@ export class EarthHQStreaming extends EventDispatcher {
   const required=this.viewCut??this.wanted;let ready=this.readyCount;if(this.viewCut){ready=0;for(const key of required.keys())if(this.assets.has(key))ready++;}
   const errors=[...(this.discoveryError?[this.discoveryError]:[]),...[...this.failed].filter(([key])=>!this.viewCut||this.viewCut.has(key)).map(([,error])=>error)];
   const complete=!this.disposed&&this.enabled&&!this.altitudePaused&&!this.discovering&&!this.pendingSpec&&!this.viewQualityDirty&&errors.length===0&&ready===required.size&&!!this.lastSpec;
-  return {status:this.disposed?'disposed':!this.enabled?'paused':this.altitudePaused?'waiting-altitude':errors.length?'incomplete':this.discovering?'discovering':complete?this.wanted.size?'complete':'no-data':'loading',complete,cameraAltitudeMeters:this.cameraAltitudeMeters,activationAltitudeMeters:this.activationAltitudeMeters,epoch:this.planet?.epoch??null,radiusMeters:this.lastSpec?.radius??this.radiusMeters,inventoryRadiusMeters:this.committedSpec?.radius??0,detailMode:this.viewCut?'screen-space':'terminal',requiredLeaves:required.size,readyLeaves:ready,missingLeaves:required.size-ready,unknownBranches:this.discoveryError?1:0,failedLeaves:errors.length-(this.discoveryError?1:0),fallbackFailures:this.viewCut?[...this.failed.keys()].filter(key=>!this.viewCut.has(key)).length:0,declaredEmptyLeaves:this.emptyLeaves,residentLeaves:this.assets.size,gpuBytes:this.gpuBytes,errors:errors.map(e=>({code:e.code??'unavailable',message:e.message,details:e.details??{}})),cachePersistent:this.cache?.persistent??false,cacheWarning:this.cache?.warning??null,...this.transport?.stats};
+  return {status:this.disposed?'disposed':!this.enabled?'paused':this.altitudePaused?'waiting-altitude':errors.length?'incomplete':this.discovering?'discovering':complete?this.wanted.size?'complete':'no-data':'loading',complete,transitioning:this.transitioning??0,cameraAltitudeMeters:this.cameraAltitudeMeters,activationAltitudeMeters:this.activationAltitudeMeters,epoch:this.planet?.epoch??null,radiusMeters:this.lastSpec?.radius??this.radiusMeters,inventoryRadiusMeters:this.committedSpec?.radius??0,detailMode:this.viewCut?'screen-space':'terminal',requiredLeaves:required.size,readyLeaves:ready,missingLeaves:required.size-ready,unknownBranches:this.discoveryError?1:0,failedLeaves:errors.length-(this.discoveryError?1:0),fallbackFailures:this.viewCut?[...this.failed.keys()].filter(key=>!this.viewCut.has(key)).length:0,declaredEmptyLeaves:this.emptyLeaves,residentLeaves:this.assets.size,gpuBytes:this.gpuBytes,errors:errors.map(e=>({code:e.code??'unavailable',message:e.message,details:e.details??{}})),cachePersistent:this.cache?.persistent??false,cacheWarning:this.cache?.warning??null,...this.transport?.stats};
  }
  getAttribution(){const counts=new Map();for(const [id,count]of this.creditCounts){const text=this.credits.get(id);if(text)counts.set(text,(counts.get(text)??0)+count);}return [...counts].sort((a,b)=>b[1]-a[1]).map(([text])=>text).join(' · ');}
  publish(){
@@ -259,9 +322,9 @@ export class EarthHQStreaming extends EventDispatcher {
  regionOptions(){const s=this.lastSpec;return s?{focusECEF:s.focus,radiusMeters:s.radius,viewDirectionECEF:s.viewDirection,viewHalfAngle:s.viewHalfAngle,nearRadiusMeters:s.nearRadius,collisionRadiusMeters:s.collisionRadius,cameraView:s.cameraView}:{};}
  retryFailed(){this.failed.clear();this.discoveryError=null;if(this.lastSpec)return this.requestRegion(this.regionOptions());return Promise.resolve(this.getCoverage());}
  setGpuBudget(bytes){if(!(bytes>0))throw new TileError('invalid_options','GPU budget must be positive');this.maxGpuBytes=bytes;this.capacityBlocked=false;for(const[key,error]of this.failed)if(error.code==='gpu_budget')this.failed.delete(key);if(this.lastSpec&&this.discoveryError?.code==='gpu_budget'){this.requestRegion({...this.regionOptions(),waitForCompletion:false}).catch(error=>{if(!isAbort(error))this.dispatchEvent({type:'error',error});});return;}if(this.lastSpec)this.sortTileQueue(this.lastSpec);this.pumpTiles();}
- setEnabled(enabled){if(this.enabled===!!enabled)return;this.enabled=!!enabled;if(!enabled){this.generation++;this.pendingSpec=null;this.discovering=false;}else if(this.lastSpec&&!this.altitudePaused)this.requestRegion({...this.regionOptions(),waitForCompletion:false}).catch(error=>{if(!isAbort(error))this.dispatchEvent({type:'error',error});});this.publish();}
+ setEnabled(enabled){if(this.enabled===!!enabled)return;this.enabled=!!enabled;if(!enabled){this.cancelRequests();this.generation++;this.pendingSpec=null;this.discovering=false;}else if(this.lastSpec&&!this.altitudePaused)this.requestRegion({...this.regionOptions(),waitForCompletion:false}).catch(error=>{if(!isAbort(error))this.dispatchEvent({type:'error',error});});this.publish();}
  async dispose(){
-  if(this.disposing)return this.disposing;this.disposed=true;this.generation++;this.pendingSpec=null;this.enabled=false;this.publish();
+  if(this.disposing)return this.disposing;this.disposed=true;this.cancelRequests();this.generation++;this.pendingSpec=null;this.enabled=false;this.publish();
   this.disposing=(async()=>{if(this.ownsSource)await this.transport.dispose();await Promise.allSettled([...(this.discovery?[this.discovery]:[]),...this.active.values()]);for(const key of [...this.assets.keys()])this.unload(key);this.wanted.clear();this.failed.clear();if(this.ownsSource)this.source.clear();if(this.ownsCache)await this.cache.close();this.group.removeFromParent();this.publish();})();return this.disposing;
  }
 }

@@ -12,7 +12,16 @@ mkdirSync(root+'/test-results',{recursive:true});
 const browser=await chromium.launch({executablePath:process.env.BROWSER_EXECUTABLE??'C:/Program Files/Google/Chrome/Application/chrome.exe',headless:true});
 const context=await browser.newContext({viewport:{width:960,height:600}}),browserCdp=await browser.newBrowserCDPSession();
 const page=await context.newPage();await page.addInitScript(()=>{const raf=requestAnimationFrame.bind(window);window.requestAnimationFrame=cb=>raf(()=>setTimeout(()=>cb(performance.now()),90));});
-const cdp=await context.newCDPSession(page);await cdp.send('Performance.enable');
+const cdp=await context.newCDPSession(page);await cdp.send('Performance.enable');await cdp.send('Network.enable');
+let network=new Map();
+cdp.on('Network.requestWillBeSent',e=>{if(e.request.url.includes('kh.google.com/rt/earth/'))network.set(e.requestId,{url:e.request.url,start:e.timestamp});});
+cdp.on('Network.responseReceived',e=>{const r=network.get(e.requestId);if(r){r.headers=e.timestamp;r.cached=!!(e.response.fromDiskCache||e.response.fromServiceWorker);}});
+cdp.on('Network.loadingFinished',e=>{const r=network.get(e.requestId);if(r){r.end=e.timestamp;r.bytes=e.encodedDataLength;}});
+cdp.on('Network.loadingFailed',e=>{const r=network.get(e.requestId);if(r){r.end=e.timestamp;r.failed=e.errorText;}});
+function networkSummary(){
+ const requests=[...network.values()],finished=requests.filter(r=>r.end!==undefined),remote=finished.filter(r=>!r.cached),waits=remote.filter(r=>r.headers!==undefined).map(r=>r.headers-r.start).sort((a,b)=>a-b),durations=remote.map(r=>r.end-r.start).sort((a,b)=>a-b);
+ return {observed:requests.length,finished:finished.length,failed:finished.filter(r=>r.failed).length,medianHeadersSeconds:waits[Math.floor(waits.length/2)]??null,maxHeadersSeconds:waits.at(-1)??null,medianRequestSeconds:durations[Math.floor(durations.length/2)]??null,maxRequestSeconds:durations.at(-1)??null,slowest:remote.sort((a,b)=>(b.end-b.start)-(a.end-a.start)).slice(0,5).map(r=>({url:r.url,headersSeconds:r.headers===undefined?null:r.headers-r.start,totalSeconds:r.end-r.start,bytes:r.bytes,failed:r.failed}))};
+}
 const errors=[];page.on('pageerror',e=>errors.push(e.message));
 const watchdog=setTimeout(()=>browser.close(),150000);
 async function sample(){
@@ -23,19 +32,20 @@ async function sample(){
 }
 try{
  for(const temperature of ['cold','warm']){
-  const before=await sample(),start=performance.now();if(temperature==='warm')await page.reload();else await page.goto(pathToFileURL(html).href+'?view=3d&visibility='+radiusMeters+'#qa');
+  network=new Map();const before=await sample(),start=performance.now();if(temperature==='warm')await page.reload();else await page.goto(pathToFileURL(html).href+'?view=3d&visibility='+radiusMeters+'#qa');
   let peak=before,finished=false,sampleError=null;
   const sampling=(async()=>{while(!finished){await new Promise(r=>setTimeout(r,1200));if(finished)break;try{const s=await sample();peak={workingSet:Math.max(peak.workingSet,s.workingSet),privateBytes:Math.max(peak.privateBytes,s.privateBytes)};}catch(e){sampleError=e.message;}}})();
   try{
    await page.waitForFunction(()=>window.__earthDemo?.state().mode==='player',{},{timeout:60000});
    const entrySeconds=(performance.now()-start)/1000;
    if(cameraAltitude)await page.evaluate(height=>{const q=window.__earthDemo;q.player.place(new q.THREE.Vector3(0,height-1.63,0));q.player.flying=true;q.look(0,-.18);},cameraAltitude);
-   if(observeSeconds)await page.waitForTimeout(observeSeconds*1000);else await page.evaluate(()=>window.__earthDemo.streamer.waitForIdle(60000));
+   let dataReadySeconds=null;
+   if(observeSeconds)await page.waitForTimeout(observeSeconds*1000);else{await page.evaluate(()=>window.__earthDemo.streamer.waitForIdle(60000));dataReadySeconds=(performance.now()-start)/1000;await page.waitForFunction(()=>(window.__earthDemo.streamer.getCoverage().transitioning??0)===0,{},{timeout:10000});}
    const observationSeconds=(performance.now()-start)/1000,completeSeconds=observeSeconds?null:observationSeconds;
    const result=await page.evaluate(()=>{const q=window.__earthDemo;return {coverage:q.streamer.getCoverage(),camera:q.camera.position.toArray(),keys:[...q.streamer.wanted.keys()].sort(),drawCalls:q.renderer.info.render.calls};});
    if((!observeSeconds&&!result.coverage.complete)||!result.coverage.readyLeaves)throw Error('Incomplete representative task');
    const after=await sample(),metrics=await cdp.send('Performance.getMetrics');
-   report.runs.push({temperature,entrySeconds,cameraAltitude,camera:result.camera,completeSeconds,observationSeconds,coverage:result.coverage,demandKeysSha256:createHash('sha256').update(result.keys.join('\n')).digest('hex'),drawCalls:result.drawCalls,cpuSeconds:after.cpuSeconds-before.cpuSeconds,peakSampledWorkingSet:Math.max(peak.workingSet,after.workingSet),peakSampledPrivateBytes:Math.max(peak.privateBytes,after.privateBytes),sampleError,rendererMetrics:Object.fromEntries(metrics.metrics.filter(m=>['TaskDuration','JSHeapUsedSize'].includes(m.name)).map(m=>[m.name,m.value]))});
+   report.runs.push({temperature,entrySeconds,cameraAltitude,camera:result.camera,dataReadySeconds,completeSeconds,observationSeconds,network:networkSummary(),coverage:result.coverage,demandKeysSha256:createHash('sha256').update(result.keys.join('\n')).digest('hex'),drawCalls:result.drawCalls,cpuSeconds:after.cpuSeconds-before.cpuSeconds,peakSampledWorkingSet:Math.max(peak.workingSet,after.workingSet),peakSampledPrivateBytes:Math.max(peak.privateBytes,after.privateBytes),sampleError,rendererMetrics:Object.fromEntries(metrics.metrics.filter(m=>['TaskDuration','JSHeapUsedSize'].includes(m.name)).map(m=>[m.name,m.value]))});
    console.log(JSON.stringify(report.runs.at(-1)));
   }finally{finished=true;await sampling;}
  }

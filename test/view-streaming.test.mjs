@@ -31,10 +31,10 @@ test('partial parent masks preserve unknown areas and restore a parent after chi
  s.viewChildren.set('10',['100']);s.updateViewMasks();assert.equal(masks.get('1'),254);s.assets.clear();await s.dispose();
 });
 
-test('octant replacement changes rendered indices per child and can restore the complete mesh',async()=>{
+test('octant replacement updates GPU masks while retaining immutable mesh indices',async()=>{
  const vertices=new Uint8Array(48);for(let i=0;i<6;i++){vertices[i*8]=i;vertices[i*8+1]=i%2;vertices[i*8+3]=i<3?0:7;}
  const asset=await buildAsset({matrixGlobeFromMesh:[1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1],meshes:[{vertices,indices:new Uint16Array([0,1,2,2,3,3,4,5])}],overlaySurfaceMeshes:[]},node('1'));
- try{const g=asset.group.children[0].geometry;assert.equal(g.drawRange.count,6);asset.setMask(254);assert.equal(g.drawRange.count,3);assert.ok([...g.index.array.slice(0,3)].every(i=>i>=3));asset.setMask(0);assert.equal(asset.group.visible,false);asset.setMask(255);assert.equal(g.drawRange.count,6);assert.equal(asset.group.visible,true);}finally{disposeAsset(asset);}
+ try{const g=asset.group.children[0].geometry;assert.equal(g.drawRange.count,6);asset.setMask(254);assert.equal(g.drawRange.count,6);assert.equal(asset.group.children[0].material.uniforms.tileMask.value,254);assert.deepEqual([...g.attributes.tileOctant.array],[1,1,1,128,128,128]);asset.setMask(0);assert.equal(asset.group.visible,false);asset.setMask(255);assert.equal(g.drawRange.count,6);assert.equal(asset.group.visible,true);}finally{disposeAsset(asset);}
 });
 
 test('provider URL formats match observed imagery and photogrammetry request families',()=>{
