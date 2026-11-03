@@ -24,9 +24,10 @@ docs/previews/ contains screenshots of this viewer. Their map imagery and 3D
 content retain the same third-party ownership as the live display. Preview
 images are documentation, not an independently licensed map-data distribution.
 
-The compiled engine includes Three.js 0.180.0 and decode-dxt 1.0.1.
-The compiled demo additionally includes three-mesh-bvh 0.9.1.
-Their complete MIT license notices are appended to the compiled artifacts and
+The compiled data API includes the client-derived decoder and has no Three.js
+or other rendering-library runtime dependency. The optional compiled demo
+includes Three.js 0.180.0, decode-dxt 1.0.1 and three-mesh-bvh 0.9.1.
+Their complete MIT license notices are appended to that compiled demo and
 copied into licenses/. These notices do not grant additional rights to imagery,
 map data or client-derived decoder code. No blanket MIT license is claimed for
 this repository.
@@ -43,7 +44,7 @@ comparison harness requires an explicitly supplied, hash-verified artifact.
 See docs/transition-analysis.md and docs/request-cancellation-analysis.md for
 function identities, observed settings and verification boundaries.
 
-The terrain atmosphere implementation adapts the active Bruneton scattering functions recovered from the reference client identified in [the source evidence report](docs/reference-client-analysis.md). Only the active terrain call graph is included. The original model carries this license; the build retains the notice in its JavaScript output.
+The terrain atmosphere implementation adapts the active Bruneton scattering functions recovered from the reference client identified in [the source evidence report](docs/reference-client-analysis.md). Only the active terrain call graph is included. The original model carries this license; the optional viewer build retains the notice in its JavaScript output.
 
 @license
 Precomputed Atmospheric Scattering

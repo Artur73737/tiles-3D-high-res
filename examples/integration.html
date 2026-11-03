@@ -1,47 +1,15 @@
-<!doctype html>
-<html lang="en">
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Tiles 3D High Res - single-bundle integration</title>
-<style>
-body { margin:0; background:#b9cddc; font:14px system-ui,sans-serif; }
-canvas { display:block; }
-#status, #credits { position:fixed; bottom:18px; color:white; background:#10202bc9; padding:10px 14px; border-radius:8px; }
-#status { left:18px; max-width:60vw; }
-#credits { right:18px; font-size:10px; }
-</style>
-<body>
-<div id="status">Loading terrain and satellite imagery...</div>
-<div id="credits"></div>
-<script src="../dist/earth-hq.bundle.js"></script>
-<script>
-const {THREE,EarthHQStreaming,SatelliteLayer,geoToECEF}=EarthHQ;
-const renderer=new THREE.WebGLRenderer({antialias:true,logarithmicDepthBuffer:true});
-renderer.setPixelRatio(Math.min(devicePixelRatio,1.7));
-renderer.setSize(innerWidth,innerHeight);document.body.appendChild(renderer.domElement);
-const scene=new THREE.Scene();scene.background=new THREE.Color(0xb9cddc);
-const camera=new THREE.PerspectiveCamera(52,innerWidth/innerHeight,.1,1e8);
-const lat=41.88931,lon=12.49223,target=geoToECEF(lat,lon),up=target.clone().normalize();
-const east=new THREE.Vector3(-Math.sin(lon*Math.PI/180),Math.cos(lon*Math.PI/180),0);
-camera.position.copy(target).addScaledVector(up,100).addScaledVector(east,70);
-camera.up.copy(up);camera.lookAt(target);
-const tiles=new EarthHQStreaming({renderer,radiusMeters:100,retainRadiusMeters:200,screenSpaceError:1});
-const satellite=new SatelliteLayer({renderer});scene.add(tiles.group,satellite.group);
-const status=document.getElementById('status'),credits=document.getElementById('credits');
-tiles.addEventListener('progress',({coverage:c})=>{
- status.textContent=c.readyLeaves+' / '+c.requiredLeaves+' terminal tiles - '+c.status;
- credits.textContent=tiles.getAttribution();
+<!doctype html><html lang="en"><meta charset="utf-8"><title>Tile API integration</title>
+<script src="../dist/earth-hq.bundle.js"></script><script>
+// No UI, canvas, rendering library or automatically started animation loop.
+const engine=new EarthHQ.EarthTileEngine();
+engine.addEventListener('tile-load',({layer,tile})=>{
+ if(layer==='3d')console.log('3D mesh arrays, textures and transform',tile);
+ else console.log('2D image bytes and geographic bounds',tile);
 });
-tiles.addEventListener('error',({error})=>{status.textContent=error.message;});
-tiles.start().then(()=>renderer.setAnimationLoop(()=>{
- satellite.update(camera);tiles.update(camera,{focusECEF:target});renderer.render(scene,camera);
-})).catch(error=>{status.textContent=error.message;});
-window.addEventListener('resize',()=>{
- camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);
-});
-window.addEventListener('pagehide',()=>{
- renderer.setAnimationLoop(null);Promise.allSettled([tiles.dispose(),satellite.dispose()]).then(()=>renderer.dispose());
-});
-</script>
-</body>
-</html>
+engine.addEventListener('error',({layer,error})=>console.error(layer,error));
+const target=EarthHQ.geoToECEF(41.88931,12.49223),up=target.clone().normalize();
+const camera={position:target.clone().addScaledVector(up,150).toArray(),direction:up.clone().multiplyScalar(-1).toArray(),up:[0,0,1],fovYDegrees:52,viewportWidth:960,viewportHeight:600};
+engine.start().then(()=>engine.update(camera));
+// In your host's frame loop: engine.update(camera). On shutdown: await engine.dispose().
+window.engine=engine;
+</script></html>

@@ -15,18 +15,17 @@
     "test:rotation": "node test/rotation.mjs",
     "fixtures": "node scripts/fetch-fixtures.mjs",
     "test:network": "node test/network.mjs",
-    "test:controls": "node test/controls.mjs"
+    "test:controls": "node test/controls.mjs",
+    "build:api": "node build.mjs --api-only"
   },
-  "dependencies": {
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "playwright-core": "1.64.1",
     "decode-dxt": "1.0.1",
     "three": "0.180.0",
     "three-mesh-bvh": "0.9.1"
   },
-  "devDependencies": {
-    "esbuild": "0.28.2",
-    "playwright-core": "1.64.1"
-  },
-  "description": "A unified JavaScript bundle for satellite imagery and maximum-detail 3D streaming with a globe and flight viewer.",
+  "description": "Renderer-independent 2D satellite and maximum-detail 3D tile streaming API, extracted from the globe viewer.",
   "packageManager": "npm@11.10.1",
   "engines": {
     "node": ">=24.22.1 <25"

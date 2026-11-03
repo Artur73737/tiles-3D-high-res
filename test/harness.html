@@ -1,9 +1,5 @@
-<!doctype html><html><meta charset="utf-8"><style>body{margin:0;background:#101a24}canvas{display:block}</style><body><script src="../dist/earth-hq.bundle.js"></script><script>
-const {THREE,EarthHQStreaming,geoToECEF}=EarthHQ;
-const renderer=new THREE.WebGLRenderer({antialias:true,logarithmicDepthBuffer:true});renderer.setSize(900,650);document.body.appendChild(renderer.domElement);
-const scene=new THREE.Scene(),camera=new THREE.PerspectiveCamera(60,900/650,.1,100000000);
-const engine=new EarthHQStreaming({renderer,radiusMeters:12,retainRadiusMeters:30,cacheName:'earth-hq-browser-tests-v1',maxGpuBytes:128*1024*1024});scene.add(engine.group);
-function position(lat,lon){camera.position.copy(geoToECEF(lat,lon,150));camera.up.copy(geoToECEF(lat+.001,lon).sub(geoToECEF(lat,lon)).normalize());camera.lookAt(geoToECEF(lat,lon,20));}
-position(41.88931,12.49223);renderer.setAnimationLoop(()=>renderer.render(scene,camera));
-window.harness={engine,scene,renderer,camera,THREE,position,ready:engine.start(),query:async(lat,lon,radius=12)=>{position(lat,lon);return engine.requestRegion({latitude:lat,longitude:lon,radiusMeters:radius});}};
-</script></html>
+<!doctype html><meta charset="utf-8"><script src="../dist/earth-hq.bundle.js"></script><script>
+const {TerrainTileEngine}=EarthHQ;
+const engine=new TerrainTileEngine({radiusMeters:12,retainRadiusMeters:30,cacheName:'earth-hq-browser-tests-v1',maxResidentBytes:128*1024*1024});
+window.harness={engine,ready:engine.start(),query:(latitude,longitude,radiusMeters=12)=>engine.requestRegion({latitude,longitude,radiusMeters})};
+</script>
