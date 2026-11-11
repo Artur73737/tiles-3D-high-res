@@ -1,5 +1,5 @@
 {
-  "name": "tiles-3d-high-res",
+  "name": "earth-hq-streaming",
   "version": "1.0.0",
   "private": true,
   "type": "module",
@@ -7,27 +7,17 @@
     "build": "node build.mjs",
     "test": "node --test test/*.test.mjs",
     "test:browser": "node test/browser.mjs",
-    "test:demo": "node test/demo.mjs",
-    "test:automatic": "node test/automatic.mjs",
-    "test:altitude": "node test/altitude.mjs",
-    "test:performance": "node test/performance.mjs",
-    "test:viewer": "node test/viewer.mjs",
-    "test:rotation": "node test/rotation.mjs",
-    "fixtures": "node scripts/fetch-fixtures.mjs",
-    "test:network": "node test/network.mjs",
-    "test:controls": "node test/controls.mjs",
-    "build:api": "node build.mjs --api-only"
+    "test:tiles": "node --test test/tiles-api.test.mjs",
+    "test:tiles:browser": "node test/tiles-browser.mjs",
+    "test:standalone": "node test/standalone.mjs",
+    "test:regressions": "node test/viewer-regressions.mjs"
+  },
+  "dependencies": {
+    "three": "0.180.0",
+    "decode-dxt": "1.0.1"
   },
   "devDependencies": {
     "esbuild": "0.28.2",
-    "playwright-core": "1.64.1",
-    "decode-dxt": "1.0.1",
-    "three": "0.180.0",
-    "three-mesh-bvh": "0.9.1"
-  },
-  "description": "Renderer-independent 2D satellite and maximum-detail 3D tile streaming API, extracted from the globe viewer.",
-  "packageManager": "npm@11.10.1",
-  "engines": {
-    "node": ">=24.22.1 <25"
+    "playwright-core": "1.64.1"
   }
 }

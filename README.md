@@ -1,202 +1,151 @@
-# Tiles 3D High Res API
+# Tiles
 
-A compiled, renderer-independent JavaScript API for satellite tiles and maximum-detail photogrammetric 3D data. It is the tile engine extracted from `globo-hq.html`: the viewer and this API share the same traversal, request priority, refinement, cache, cancellation, retention and transition code.
+Google satellite imagery (2D) and Google photorealistic 3D at full resolution, in one standalone
+script: `dist/3d_tiles.bundle.min.js`. Three.js is bundled. The script exposes the global `Tiles`.
 
-**Use `dist/earth-hq.bundle.js`.** It exposes `globalThis.EarthHQ` through a classic script. The file contains the metadata parser, payload decoder and embedded decoder workers. It contains **no Three.js, UI, canvas, WebGL renderer, terrain shader, camera controller or animation loop**. Your application supplies the camera state and consumes image bytes and mesh arrays.
+Two ways to use it, sharing the same API:
 
-`dist/earth-hq.esm.js` is the same self-contained API as an ES module. It has no external Three.js import. You need only one format.
+- **API only.** `Tiles.Tiles2D` and `Tiles.Tiles3D` fetch tiles and decode them for you.
+- **Viewer.** `Tiles.createViewer(target, options)` mounts an iframe with the full UI on top of the same API.
+
+| 3D fly | 2D satellite | Globe |
+|---|---|---|
+| ![3D fly](docs/previews/image.png) | ![2D satellite](docs/previews/image%20copy.png) | ![Globe](docs/previews/image%20copy%202.png) |
 
 ## Build
 
-Use Node.js 24.22.1 and npm 11.10.1, pinned in `.nvmrc` and `package.json`.
-
-```sh
+```bash
 npm ci
-npm run build:api
+npm run build      # dist/3d_tiles.bundle.min.js + standalone.html
+npm test
 ```
 
-This compiles the API files and writes `dist/api-inputs.json`, the actual dependency inventory. The build fails if the API graph contains the viewer, its rendering adapters or Three.js. No runtime npm installation is needed when loading the compiled browser bundle.
+`standalone.html` is a ready-to-open demo: the bundle plus a single `createViewer` call.
+It is published on GitHub Pages at <https://artur73737.github.io/tiles-3D-high-res/> on every push to `main`.
+It accepts `?view=flat|globe&mode=2d|3d|fly&lat=..&lon=..&zoom=..`.
 
-`npm run build` additionally builds the optional `globo-hq.html` viewer. Its Three.js integration stays outside the API bundle. See [viewer and previews](docs/viewer.md). Generated files, downloaded provider data and local test reports are excluded from Git.
-
-## Start the engine
+## Load
 
 ```html
-<script src="earth-hq.bundle.js"></script>
+<script src="3d_tiles.bundle.min.js"></script>
 <script>
-const engine = new EarthHQ.EarthTileEngine();
-
-engine.addEventListener('tile-load', ({ layer, tile }) => {
-  if (layer === '3d') {
-    // Consume tile.meshes and tile.matrixGlobeFromMesh in your own renderer.
-    console.log(tile.descriptor.key, tile.meshes, tile.matrixGlobeFromMesh);
-  } else {
-    // Unmodified encoded image; no resizing or raster-to-mesh conversion.
-    console.log(tile.node.bounds, tile.data, tile.mimeType);
-  }
-});
-engine.addEventListener('tile-update', ({ layer, tile }) => {
-  // 3D: apply tile.mask and tile.passes. 2D: apply tile.visible.
-});
-engine.addEventListener('tile-unload', ({ layer, tile }) => {
-  // Release your application's graphics resources for this tile.
-});
-engine.addEventListener('error', ({ layer, error }) => console.error(layer, error));
-
-awaitStart().catch(console.error);
-async function awaitStart() {
-  await engine.start();
-  const surface = EarthHQ.geoToECEF(41.88931, 12.49223);
-  const normal = surface.clone().normalize();
-  engine.update({
-    position: surface.clone().addScaledVector(normal, 150).toArray(),
-    direction: normal.clone().multiplyScalar(-1).toArray(),
-    up: [0, 0, 1],
-    fovYDegrees: 52,
-    viewportWidth: 1280,
-    viewportHeight: 800
-  });
-}
-// In your host's frame loop: engine.update(currentCameraState).
-// On shutdown: await engine.dispose().
+  console.log(Tiles.VERSION);
 </script>
 ```
 
-The engine starts requests automatically from camera demand. It never creates a screen, starts a render loop or captures input. Call `update` every host frame so that request retirement and parent/child transition timing continue even when the camera is stationary. Start once before updating. Public positions accept `[x, y, z]` arrays or `{x, y, z}` objects.
+## Viewer (iframe UI)
 
-For module consumers:
+```html
+<div id="map" style="width:100%;height:600px"></div>
+<script src="3d_tiles.bundle.min.js"></script>
+<script>
+  const viewer = Tiles.createViewer('#map', {
+    view: 'flat',            // 'flat' | 'globe'
+    mode: '3d',              // '2d' | '3d' | 'fly'
+    latitude: 41.89021,
+    longitude: 12.49223,
+    zoom: 18,
+    panel: true,             // right sidebar (options)
+    layersPanel: true,       // left sidebar (layers + enhance)
+    d2: { layers: ['s', 'h'], scale: 2, language: 'en' },
+    d3: { radiusMeters: 500, fullDetailMeters: 150 },
+    network: { concurrency: 12, retries: 2 },
+    cache: { mode: 'persistent', diskMb: 1024 },
+  });
+
+  viewer.goTo({ latitude: 48.8584, longitude: 2.2945, zoom: 17 });
+  viewer.setView('globe');
+  viewer.setMode('fly');
+  viewer.set({ d2: { layers: ['y'] } });          // changes apply live
+  viewer.on('place', p => console.log(p.name));   // also: move, mode, view, tile, error, status
+  // viewer.destroy();
+</script>
+```
+
+Other controller methods: `zoomIn()`, `zoomOut()`, `resetNorth()`, `searchPlaces(text)`,
+`setGeocoder({...})`, `setEnhance({...})`, `exportPNG()`, `getView()`, `getStats()`, `getFps()`.
+
+## API only
+
+### 2D imagery
 
 ```js
-import { EarthTileEngine } from './earth-hq.esm.js';
-const engine = new EarthTileEngine();
+const t2 = new Tiles.Tiles2D({ layers: ['s'], scale: 2, language: 'en' });
+
+const tile = await t2.getTile(18, 140111, 97411);          // { bytes, mimeType, ... }
+const url  = t2.tileUrl(18, 140111, 97411);
+const max  = await t2.findMaxZoom(41.89021, 12.49223);      // deepest real imagery
+
+const img = await t2.getImage(
+  { west: 12.490, north: 41.892, east: 12.494, south: 41.888 }, 18);
+document.body.append(img.canvas);                           // or await img.blob()
 ```
 
-## Camera contract
+Layers: `s` satellite, `y` hybrid, `h` labels, `m` roadmap, `p` terrain+, `t` relief,
+`r` roads, `traffic`, `transit`, `bike`. Styles go through `setStyle('s.t:3|p.v:off')`.
 
-Coordinates are Earth-centred, Earth-fixed (ECEF) metres. Direction and up are world-space vectors. `fovYDegrees` is the vertical field of view. Viewport dimensions are **drawing-buffer pixels**, including your device-pixel/render scale. The default clipping distances are 0.1 and 150,000,000 metres; pass `near` and `far` to match your host.
-
-If your host already calculates matrices, pass `position`, `direction`, a 16-element column-major `viewProjection` matrix that maps ECEF to clip space, and `pixelScale`. Clip depth uses the WebGL/OpenGL range `[-1, +1]`. `pixelScale` is drawing-buffer width multiplied by the horizontal perspective projection coefficient divided by two. No renderer-specific camera object is required. `createView(input)` validates and normalizes either representation.
-
-Optional second argument to `engine.update(view, options)` controls the terrain region: `radiusMeters`, `focusECEF`, `viewDirectionECEF`, `viewHalfAngle`, `nearRadiusMeters` and `collisionRadiusMeters`. Default 3D range is 2 km. 3D camera streaming activates below 2,500 m with 500 m altitude hysteresis; the 2D engine continues independently.
-
-## Data returned
-
-### 3D tiles
-
-`tile-load` supplies a terrain asset with these fields:
-
-| Field | Meaning |
-| --- | --- |
-| `descriptor` | Provider path, epoch, terminal flag, texel size, ECEF bounds and request key |
-| `matrixGlobeFromMesh` | Float64Array of 16 column-major affine coefficients, local mesh to ECEF |
-| `meshes` | Prepared geometry and source textures, without graphics objects |
-| `decoded` | Complete decoded provider payload, including original packed geometry and layers |
-| `copyrightIds` | Provider copyright identifiers |
-| `mask` | Currently selected octants, one bit per octant |
-| `passes` | Current primary/secondary transition plan: `id`, `mask`, `opacity`, `secondary` |
-| `byteLength` | Estimated retained payload/array storage, excluding general JS object overhead |
-| `disposed` | Whether the engine released this asset |
-
-Each prepared mesh contains `positions` (Uint8Array, three local components per vertex), `uv` (Float32Array, two components per vertex), `indices` (Uint16Array or Uint32Array, triangle list), `vertexOctants` (Float32Array of `2 ** octant`), `octants` (eight index arrays), `surface`, `texture` and the original decoded `source` mesh. Positions use the supplied affine transform; they are not normalized coordinates.
-
-`texture` retains provider `textureFormat`, `width`, `height` and encoded `bytes`. The observed format 6 contains DXT1 blocks and format 1 contains JPEG bytes. The API does not downsample, convert to RGBA or upload them. Prepared triangles use the viewer's visible terrain layers; `decoded` and `mesh.source` preserve the remaining provider layers and attributes rather than discarding them.
-
-Transition plans preserve the viewer's octant coverage and paired parent/child selection. A host that wants the same visual transitions must implement the corresponding draw passes. Graphics shader execution, atmosphere and blending belong to the renderer; the existing viewer adapter remains an implementation example.
-
-### 2D tiles
-
-A satellite record contains `node` (`z`, `x`, `y`, `key`, geographic `bounds` and texel size), `data` (Uint8Array of the original encoded image), `blob`, `mimeType`, `visible` and `used`. No ImageBitmap or graphics object is created by the API. Your host decodes the image if needed. Missing fine imagery keeps the parent selected, as in the viewer.
-
-Assets are engine-owned. Release host GPU resources on `tile-unload`; copy buffers if they must outlive eviction/disposal. `dispose()` cancels owned requests and workers and releases cached/resident state. Merely retaining an event's asset in your own application can keep its JavaScript arrays alive.
-
-## Maximum detail
-
-Camera-driven 3D selection uses the same projected-texel thresholds, mesh angular correction, parent dependencies and request comparator as the viewer. It descends to actual provider terminals as their projected detail requires it. There is no fixed depth-22 or depth-25 ceiling. Nearby and visible detail is refined before lower-priority requests. Decoded meshes and texture bytes remain at their delivered resolution.
-
-To require **all actual terminal meshes in a bounded area**, independently of camera pixel size:
+### 3D meshes
 
 ```js
-const terrain = new EarthHQ.TerrainTileEngine();
-await terrain.start();
-terrain.addEventListener('tile-load', ({ asset }) => consume(asset));
-const coverage = await terrain.requestRegion({
-  latitude: 41.88931,
-  longitude: 12.49223,
-  radiusMeters: 25
-});
-if (!coverage.complete) console.error(coverage.errors);
-// Use terrain.getAttribution() wherever you display the content.
-await terrain.dispose();
+const t3 = new Tiles.Tiles3D({ radiusMeters: 150, coordinates: 'local' });
+t3.setLocation(41.89021, 12.49223);
+
+const list = await t3.listTiles();                 // descriptors, no payload yet
+const tile = await t3.getTile(list.tiles[0]);      // positions, uvs, indices, texture per mesh
+const h    = await t3.getElevation(41.89021, 12.49223);
+
+// Three.js scene object (Three.js is in the bundle; any renderer works)
+const group = await t3.toThree(tile, { renderer });
+scene.add(group);
+
+// Everything in the area, with progress
+await t3.getTiles({}, { onProgress: p => console.log(p.done, '/', p.total) });
 ```
 
-A terminal-area request can be much larger than the camera-selected view. It is explicit and bypasses automatic altitude gating. Keep the area and memory budget appropriate for your application. Unknown metadata, failed selected tiles and capacity exhaustion remain incomplete; no missing branch is silently declared complete.
-
-Satellite selection retains the viewer's adaptive Web Mercator traversal, with `maxZoom: 22` by default and an explicit configurable ceiling up to 30. The configured ceiling is **not proof that the provider supplies distinct high-resolution imagery at every level/location**. Missing images retain their parents; neither the viewer nor the API can manufacture source detail. Source imagery and photogrammetry coverage vary geographically.
-
-## Options and controls
+### Place search
 
 ```js
-const engine = new EarthHQ.EarthTileEngine({
-  terrain: {
-    radiusMeters: 2000,
-    retainRadiusMeters: 2300,
-    screenSpaceError: 1,
-    concurrency: 18,
-    maxResidentBytes: 512 * 1024 ** 2,
-    cacheBytes: 512 * 1024 ** 2,
-    cacheName: 'my-tile-cache',
-    activationAltitudeMeters: 2500,
-    altitudeHysteresisMeters: 500
-  },
-  satellite: { maxZoom: 22, maxTiles: 512, concurrency: 8 }
-});
+const geo = new Tiles.Geocoder();                  // 'auto' | 'photon' | 'nominatim' | 'google' (apiKey)
+const [best] = await geo.search('chernobyl');      // { name, context, latitude, longitude, zoom }
 ```
 
-Set `terrain: false` or `satellite: false` to disable that engine. `fetch` at the top level supplies a custom transport function to both; a per-engine `fetch` overrides it. The 3D source supports a custom `baseUrl` or `source`. Smaller positive `screenSpaceError` values demand more camera detail. Region requests without a camera traverse terminals regardless of that value.
+Every option has a setter and can also be passed to `set({...})`. Examples: `setLayers`, `setScale`,
+`setRadius`, `setFullDetailRadius`, `setConcurrency`, `setRetries`, `setCache`.
 
-`engine.terrain` is the shared `TerrainTileEngine`; `engine.satellite` is the shared `SatelliteTileEngine`. They are also exported separately.
+## React
 
-Terrain methods include `start`, `update`, `requestRegion`, `getCoverage`, `getAttribution`, `waitForIdle`, `retryFailed`, `setEnabled` and `dispose`. `setGpuBudget(bytes)` is retained from the viewer for compatibility and controls the same capacity accounting; in this data-only API it limits retained data, without allocating a GPU. `maxResidentBytes` is the preferred constructor option. Coverage supplies `residentBytes`; `gpuBytes` remains a legacy alias. `complete` describes data readiness, while `transitioning` counts visual plans still changing.
+Load the bundle once (for example in `index.html`), then mount the viewer in an effect:
 
-Satellite methods include `update`, `status`, `getAttribution` and `dispose`. `resident` exposes loaded records and `needed` the selected keys. `status()` reports target/ready zoom, resident/visible count, pending/queued work and the latest error. A ready zoom does not prove that every selected tile is ready.
+```jsx
+import { useEffect, useRef } from 'react';
 
-Unified events are `tile-load`, `tile-update`, `tile-unload`, `progress`, `warning` and `error`; `layer` identifies `3d` or `2d`. A standalone terrain engine uses `asset` in tile events; the unified engine additionally exposes it as `tile`. Progress/warning events are emitted by the terrain workflow; satellite changes use its tile events and `status()`.
+export function TilesViewer({ lat, lon, zoom = 18, mode = '3d' }) {
+  const host = useRef(null);
+  const viewer = useRef(null);
 
-Low-level exports are `RocktreeSource`, `ByteTransport`, `MemoryByteCache`, `IndexedDbByteCache`, `ResilientByteCache`, `TileError`, `TileFade`, `geoToECEF`, `ecefToGeo`, `satelliteBounds` and `createView`. These are this project's APIs, not a claim to expose every private API of the reference application.
+  useEffect(() => {
+    viewer.current = window.Tiles.createViewer(host.current, {
+      latitude: lat, longitude: lon, zoom, mode,
+    });
+    return () => viewer.current.destroy();
+  }, []);
 
-## Request and cache behavior
+  useEffect(() => {
+    viewer.current?.goTo({ latitude: lat, longitude: lon, zoom });
+  }, [lat, lon, zoom]);
 
-The 3D pipeline uses bounded, deduplicated requests with independent demand subscriptions, reprioritization and real aborts. Obsolete camera payloads survive the reference two-frame grace interval and are retired on the following frame. Canceling an old consumer does not abort a request still needed by another. Active and queued stale requests are canceled, partial downloads are not cached and late canceled results cannot attach a tile. Transient failures retry up to three attempts with a 15-second timeout per attempt.
-
-3D bytes use freshness-aware memory/IndexedDB caches. IndexedDB failure falls back to RAM and is reported. The satellite engine retains its separate bounded LRU of encoded images and browser HTTP caching, queue, missing-image backoff and off-view cancellation. Persistent-cache availability depends on browser origin and storage policy. No whole-planet offline download is implied.
-
-## Validation and provenance
-
-```sh
-npm run fixtures
-npm test
-npm run build
-npm run test:browser
-npm run test:automatic
+  return <div ref={host} style={{ width: '100%', height: 600 }} />;
+}
 ```
 
-Fixture acquisition verifies pinned hashes and does not silently replace changed captures. Browser checks use installed Chrome; set `BROWSER_EXECUTABLE` to override its path. Ignored reports are in `test-results/`.
+API only in React works the same way: create a `Tiles2D` or `Tiles3D` in an effect and call
+`dispose()` in the cleanup.
 
-The source suite passes 81 tests. The extraction tests compare camera projection/frustum decisions, 3D requested/selected inventories and masks, geometry arrays, and 2D selected keys/request order between the API and the viewer. They also exercise terminal depth 32, raw texture/image bytes and renderer-free event/disposal behavior. The existing cancellation, cache, capacity, altitude, transition and collision tests continue to exercise the shared implementation. The compiled API browser check passed with 21 terminal tiles in Rome and 5 in Milan, 36 persistent-cache hits after browser restart, and 173 satellite tiles including level-22 JPEG data. It verified embedded workers, decoded mesh/texture arrays, 256×256 raster dimensions and disposal with no canvas or Three.js export. This verifies delivered level-22 data at the sampled location, not distinct source detail worldwide.
+## Source
 
-Reference evidence: [traversal and renderer analysis](docs/reference-client-analysis.md), [request cancellation](docs/request-cancellation-analysis.md), [transitions](docs/transition-analysis.md), [transition eligibility](docs/transition-eligibility-analysis.md), and [atmosphere analysis](docs/atmosphere-cpu-analysis.md). Atmosphere/shader rendering stays in the optional viewer, outside this API. The documented comparisons establish those paths, not full binary identity with the reference application.
-
-Both layers use Google-operated services: Rocktree at `https://kh.google.com/rt/earth/` and satellite raster tiles at `https://mt1.google.com/vt`. These are undocumented endpoints with provider-dependent availability, CORS and protocol behavior. No API key is embedded. Display provider attribution when rendering the data. Imagery, geometry and client-derived decoder code are not relicensed by this project; see [SOURCE-NOTICES.txt](SOURCE-NOTICES.txt).
-
-## Source ownership
-
-- `src/api.js`: renderer-independent public exports and unified facade.
-- `src/terrain-engine.js`: the shared 3D scheduler, traversal, transitions and lifetime.
-- `src/satellite-engine.js`: the shared 2D selector, request queue and lifetime.
-- `src/tile-data.js`: one owner for decoded geometry interpretation and angular correction.
-- `src/view.js`, `src/math.js`, `src/geo-core.js`: CPU camera and geographic calculations.
-- `src/source.js`, `src/transport.js`, `src/demand.js`, `src/cache.js`, `src/decoder.js`: shared data pipeline.
-- `src/streamer.js`, `src/satellite.js`, `src/geometry.js`: optional Three.js adapters.
-- `src/demo/`: optional viewer UI and navigation.
-
-Migration: the compiled API no longer exports `THREE`, `EarthHQStreaming` or the graphical `SatelliteLayer`. Use the data classes above. The legacy source adapters remain available to the viewer; its application is compiled separately.
+```
+src/tiles.js         bundle entry (global Tiles)
+src/core/            errors, geo, net/ (transport, cache, shared requests, priority), rocktree/ (decoder workers)
+src/api/             Tiles2D, Tiles3D, Geocoder, enhancer
+src/ui/              viewer, template, scene/ (globe, 3D streaming, fade, sharpen)
+```

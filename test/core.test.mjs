@@ -2,15 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {Vector3,Scene,PerspectiveCamera,Group} from 'three';
-import decode from '../src/vendor/rocktree-decoder.cjs';
-import {planetMetadata} from '../src/protobuf.js';
-import {MemoryByteCache,cacheLifetime} from '../src/cache.js';
-import {ByteTransport} from '../src/transport.js';
-import {RocktreeSource} from '../src/source.js';
-import {EarthHQStreaming} from '../src/streamer.js';
-import {buildAsset,disposeAsset} from '../src/geometry.js';
-import {intersectsColumn,intersectsRegion} from '../src/geo.js';
-import {SprintInput} from '../src/demo/SprintInput.js';
+import decode from '../src/core/rocktree/vendor/rocktree-decoder.cjs';
+import {planetMetadata} from '../src/core/rocktree/protobuf.js';
+import {MemoryByteCache,cacheLifetime} from '../src/core/net/cache.js';
+import {ByteTransport} from '../src/core/net/transport.js';
+import {GoogleEarthSource} from '../src/core/rocktree/source.js';
+import {EarthHQStreaming} from '../src/engine/streamer.js';
+import {buildAsset,disposeAsset} from '../src/core/rocktree/geometry.js';
+import {intersectsColumn,intersectsRegion} from '../src/core/geo.js';
 const fixture=name=>new Uint8Array(readFileSync(new URL('./fixtures/'+name,import.meta.url)));
 const root=()=>planetMetadata(fixture('planet.pb'));
 const decoded=async()=>(await decode(1,fixture('node.pb'))).payload;
@@ -21,7 +20,7 @@ function fakeSource({depth=0,fail=false,load=decoded}={}){
 }
 test('real metadata root and bulk parse at the producing boundary',async()=>{
  assert.equal(root().epoch,1016);assert.equal(root().radius,6371010);
- const source=new RocktreeSource({transport:{get:async()=>fixture('bulk.pb').buffer}}),prefix='30427242735060526245';
+ const source=new GoogleEarthSource({transport:{get:async()=>fixture('bulk.pb').buffer}}),prefix='30427242735060526245';
  const bulk=await source.loadBulk(prefix,1016);let terminals=0;
  async function walk(n){if(n.leaf){if(n.hasData)terminals++;return;}for(const child of await source.children(n))await walk(child);}
  await walk({path:prefix,index:-1,bulk,leaf:false});assert.ok(terminals>0);
@@ -141,7 +140,4 @@ test('a failed metadata child still waits for mixed late child outcomes on clean
 test('decoded assets dispose exactly once without disposing the host scene',async()=>{
  const asset=await buildAsset(await decoded(),{key:'fixture',path:'fixture'}),scene=new Scene();scene.add(asset.group);let disposed=0;asset.group.traverse(m=>m.isMesh&&m.geometry.addEventListener('dispose',()=>disposed++));
  const count=asset.group.children.length;assert.ok(count>0);disposeAsset(asset);disposeAsset(asset);assert.equal(disposed,count);assert.equal(scene.children.length,0);
-});
-test('double W requires release and a held second press; repeat and blur cannot latch sprint',()=>{
- const input=new SprintInput();input.down('KeyW',0);input.down('KeyW',100,true);assert.equal(input.keys.sprint,false);input.up('KeyW');input.down('KeyW',200);assert.equal(input.keys.sprint,true);input.down('KeyW',600,true);assert.equal(input.keys.sprint,true);input.up('KeyW');assert.equal(input.keys.sprint,false);input.reset();input.down('KeyW',700);assert.equal(input.keys.sprint,false);
 });

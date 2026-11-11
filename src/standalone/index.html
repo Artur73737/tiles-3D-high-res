@@ -1,0 +1,10 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Tiles</title>
+<style>html,body{margin:0;height:100%;background:#090909}#viewer{position:fixed;inset:0}</style></head><body>
+<div id="viewer"></div>
+<script>__TILES__</script>
+<script>
+// UI mode: one call. API-only mode: use Tiles.Tiles2D / Tiles.Tiles3D directly (same bundle).
+const q=new URLSearchParams(location.search),n=k=>q.has(k)?Number(q.get(k)):undefined;
+window.viewer=Tiles.createViewer('#viewer',{view:q.get('view')||'flat',mode:q.get('mode')||'2d',latitude:n('lat'),longitude:n('lon'),zoom:n('zoom'),panel:q.get('panel')!=='0'});
+</script>
+</body></html>

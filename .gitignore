@@ -1,12 +1,14 @@
 # Dependencies and generated applications
 /node_modules/
 /dist/
-/globo-hq.html
+/standalone.html
+/manifest.json
 /release/
 
 # Local investigations, browser profiles, measurements and downloaded data
 /.bench/
 /test-results/
+/verification/
 /assets/
 /test/fixtures/*.pb
 /test/fixtures/provenance.json

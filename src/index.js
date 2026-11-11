@@ -1,8 +1,7 @@
 export * as THREE from 'three';
-export {EarthHQStreaming} from './streamer.js';
-export {RocktreeSource} from './source.js';
-export {SatelliteLayer,satelliteBounds} from './satellite.js';
-export {MemoryByteCache,IndexedDbByteCache,ResilientByteCache} from './cache.js';
-export {ByteTransport} from './transport.js';
-export {TileError} from './errors.js';
-export {geoToECEF,ecefToGeo,localFrame} from './geo.js';
+export {EarthHQStreaming} from './engine/streamer.js';
+export {GoogleEarthSource} from './core/rocktree/source.js';
+export {MemoryByteCache,IndexedDbByteCache,ResilientByteCache} from './core/net/cache.js';
+export {ByteTransport} from './core/net/transport.js';
+export {TileError} from './core/errors.js';
+export {geoToECEF,ecefToGeo,localFrame} from './core/geo.js';

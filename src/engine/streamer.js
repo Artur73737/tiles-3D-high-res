@@ -1,0 +1,159 @@
+import {EventDispatcher,Group,Vector3,Matrix4} from 'three';
+import {ResilientByteCache} from '../core/net/cache.js';
+import {ByteTransport} from '../core/net/transport.js';
+import {GoogleEarthSource} from '../core/rocktree/source.js';
+import {buildAsset,disposeAsset} from '../core/rocktree/geometry.js';
+import {intersectsRegion,geoToECEF} from '../core/geo.js';
+import {TileError,isAbort,aborted} from '../core/errors.js';
+const cpuTurn=()=>new Promise(resolve=>setTimeout(resolve,0));
+function viewDirection(focus,value){
+ if(!value)return null;
+ const direction=new Vector3().copy(value),normal=focus.clone().normalize();
+ direction.addScaledVector(normal,-direction.dot(normal));
+ if(![direction.x,direction.y,direction.z].every(Number.isFinite))throw new TileError('invalid_focus','Invalid view direction');
+ return direction.lengthSq()<1e-12?null:direction.normalize();
+}
+export class EarthHQStreaming extends EventDispatcher {
+ constructor({renderer,cache,cacheName='earth-hq-cache-v1',cacheBytes=512*1024*1024,fetch,baseUrl,source,radiusMeters=70,retainRadiusMeters=150,concurrency=18,maxGpuBytes=512*1024*1024,maxResponseBytes,activationAltitudeMeters=2500,altitudeHysteresisMeters=500,previewRadiusMeters=0}={}){
+  super();if(!Number.isFinite(radiusMeters)||radiusMeters<=0||!Number.isFinite(retainRadiusMeters)||retainRadiusMeters<radiusMeters||!Number.isInteger(concurrency)||concurrency<1||!Number.isFinite(maxGpuBytes)||maxGpuBytes<=0)throw new TileError('invalid_options','Invalid radius, retention, GPU budget or concurrency');
+  if(!Number.isFinite(activationAltitudeMeters)||activationAltitudeMeters<=0||!Number.isFinite(altitudeHysteresisMeters)||altitudeHysteresisMeters<0)throw new TileError('invalid_options','Invalid automatic streaming altitude');
+  if(!Number.isFinite(previewRadiusMeters)||previewRadiusMeters<0)throw new TileError('invalid_options','Invalid preview radius');
+  this.previewRadiusMeters=previewRadiusMeters;this.previewWanted=new Map();this.previews=new Map();this.previewQueue=[];this.previewCursor=0;this.previewRemaining=new Map();this.previewForLeaf=new Map();this.previewFailed=new Set();
+  this.capacityBlocked=false;
+  this.localDiscoveryReady=false;
+  this.activationAltitudeMeters=activationAltitudeMeters;this.altitudeHysteresisMeters=altitudeHysteresisMeters;this.altitudePaused=true;this.cameraAltitudeMeters=null;
+  this.renderer=renderer;this.group=new Group();this.group.name='Earth HQ streaming';this.radiusMeters=radiusMeters;this.retainRadiusMeters=retainRadiusMeters;this.maxGpuBytes=maxGpuBytes;this.concurrency=concurrency;
+  this.ownsCache=!cache&&!source;this.cache=cache??(!source?new ResilientByteCache({name:cacheName,maxBytes:cacheBytes}):null);
+  this.ownsSource=!source;this.transport=source?.transport??new ByteTransport({cache:this.cache,fetch,concurrency,maxResponseBytes});this.source=source??new GoogleEarthSource({transport:this.transport,baseUrl});
+  this.assets=new Map();this.wanted=new Map();this.failed=new Map();this.active=new Map();this.readyCount=0;this.creditCounts=new Map();this.gpuBytes=0;this.disposed=false;this.enabled=true;this.generation=0;this.pendingSpec=null;this.discovery=null;this.lastSpec=null;this.discoveryError=null;this.discovering=false;this.queryCount=0;this.initializing=null;this.planet=null;this.credits=new Map();this.emptyLeaves=0;this.disposing=null;
+ }
+ async start(){if(this.disposed)throw aborted();if(!this.initializing)this.initializing=(async()=>{this.planet=await this.source.root();try{this.credits=await this.source.copyrights(this.planet.epoch);}catch(error){if(isAbort(error))throw error;this.dispatchEvent({type:'warning',error,phase:'attribution'});}return this.planet;})();return this.initializing;}
+ async requestRegion({latitude,longitude,focusECEF,radiusMeters=this.radiusMeters,viewDirectionECEF,viewHalfAngle=Math.PI,nearRadiusMeters=60,waitForCompletion=true}={}){
+  if(!focusECEF&&(!Number.isFinite(latitude)||latitude< -90||latitude>90||!Number.isFinite(longitude)))throw new TileError('invalid_focus','Latitude or longitude invalid');
+  const generation=++this.generation;
+  await this.start();if(this.disposed)throw aborted();if(generation!==this.generation)return this.getCoverage();if(!Number.isFinite(radiusMeters)||!(radiusMeters>0))throw new TileError('invalid_options','HQ radius must be finite and positive');
+  const focus=focusECEF?new Vector3().copy(focusECEF):geoToECEF(latitude,longitude,0,this.planet.radius);
+  if(![focus.x,focus.y,focus.z].every(Number.isFinite)||focus.lengthSq()===0)throw new TileError('invalid_focus','Invalid globe focus');
+  const normal=focus.clone().normalize(),direction=viewDirection(focus,viewDirectionECEF);
+  if(!Number.isFinite(viewHalfAngle)||viewHalfAngle<=0||viewHalfAngle>Math.PI||!Number.isFinite(nearRadiusMeters)||nearRadiusMeters<0)throw new TileError('invalid_options','Invalid view angle or near radius');
+  this.enabled=true;this.altitudePaused=false;
+  const spec={focus:focus.normalize().multiplyScalar(this.planet.radius),normal,radius:radiusMeters,viewDirection:direction,viewHalfAngle,nearRadius:nearRadiusMeters,generation,at:Date.now()};this.lastSpec=spec;this.pendingSpec=spec;this.discovering=true;this.localDiscoveryReady=false;this.discoveryError=null;this.publish();this.pumpDiscovery();return waitForCompletion?this.waitForIdle():this.getCoverage();
+ }
+ update(camera,{focusECEF,radiusMeters=this.radiusMeters,viewDirectionECEF,viewHalfAngle=Math.PI,nearRadiusMeters=60}={}){
+  if(this.disposed||!this.enabled||!this.planet)return;
+  this.group.updateWorldMatrix(true,false);
+  const position=camera.getWorldPosition(new Vector3()).applyMatrix4(new Matrix4().copy(this.group.matrixWorld).invert());
+  if(![position.x,position.y,position.z].every(Number.isFinite)||position.lengthSq()===0)return;
+  this.cameraAltitudeMeters=position.length()-this.planet.radius;
+  const paused=this.cameraAltitudeMeters>this.activationAltitudeMeters+(this.altitudePaused?0:this.altitudeHysteresisMeters);
+  if(paused){if(!this.altitudePaused){this.altitudePaused=true;this.generation++;this.pendingSpec=null;this.discovering=false;this.publish();}return;}
+  const resumed=this.altitudePaused;this.altitudePaused=false;
+  const focus=focusECEF?new Vector3().copy(focusECEF):position;
+  if(focus.lengthSq()===0)return;focus.normalize().multiplyScalar(this.planet.radius);
+  const direction=viewDirection(focus,viewDirectionECEF);
+  const turned=direction&&(!this.lastSpec?.viewDirection||direction.dot(this.lastSpec.viewDirection)<Math.cos(Math.PI/30));
+  if(resumed||!this.lastSpec||this.lastSpec.focus.distanceTo(focus)>Math.max(2,Math.min(20,radiusMeters*.08))||this.lastSpec.radius!==radiusMeters||this.lastSpec.viewHalfAngle!==viewHalfAngle||this.lastSpec.nearRadius!==nearRadiusMeters||!!direction!==!!this.lastSpec.viewDirection||turned||Date.now()-this.lastSpec.at>60000){this.requestRegion({focusECEF:focus,radiusMeters,viewDirectionECEF:direction,viewHalfAngle,nearRadiusMeters,waitForCompletion:false}).catch(error=>{if(!isAbort(error))this.dispatchEvent({type:'error',error});});}
+ }
+ async pumpDiscovery(){
+  if(this.discovery||this.disposed)return;
+  this.discovery=(async()=>{
+   while(this.pendingSpec&&!this.disposed){const spec=this.pendingSpec;this.pendingSpec=null;
+    try{
+     if(this.queryCount++>0)this.planet=await this.source.root();
+     // Load a small set of real parent meshes before the expensive terminal
+     // inventory. These never count as completed maximum-detail coverage.
+     this.tileQueue=[];this.tileCursor=0;
+     if(this.previewRadiusMeters>0&&spec.radius>this.previewRadiusMeters){
+      const previews=new Map();
+      const previewWalk=async node=>{
+       if(this.disposed||spec.generation!==this.generation||node.empty)return;
+       if(!node.root&&!intersectsRegion(node,spec))return;
+       if(node.leaf)return;
+       if(node.hasData&&node.radius<=this.previewRadiusMeters){previews.set(node.key,node);return;}
+       const outcomes=await Promise.allSettled((await this.source.children(node)).map(previewWalk));const failed=outcomes.find(r=>r.status==='rejected');if(failed)throw failed.reason;
+      };
+      await previewWalk({root:true,epoch:this.planet.epoch});
+      if(this.disposed||spec.generation!==this.generation)continue;
+      this.previewWanted=previews;this.previewRemaining.clear();this.previewForLeaf.clear();this.previewFailed.clear();
+      for(const key of this.previews.keys())if(!previews.has(key)||this.previews.get(key).expiresAt<=Date.now())this.unload(key);
+      this.previewQueue=[...previews.values()].sort((a,b)=>a.center.distanceToSquared(spec.focus)-b.center.distanceToSquared(spec.focus));this.previewCursor=0;this.pumpTiles();
+     }else{
+      this.previewWanted.clear();this.previewQueue=[];this.previewRemaining.clear();this.previewForLeaf.clear();for(const key of this.previews.keys())this.unload(key);
+     }
+     if(this.previewRadiusMeters>0&&spec.radius>this.previewRadiusMeters){
+      const localSpec={...spec,radius:this.previewRadiusMeters},local=await this.collectLeaves(localSpec);
+      if(this.disposed||spec.generation!==this.generation)continue;
+      this.installInventory(local,localSpec,false);
+     }
+     const inventory=await this.collectLeaves(spec);
+     if(this.disposed||spec.generation!==this.generation)continue;
+     this.installInventory(inventory,spec,true);
+    }catch(error){if(this.disposed||spec.generation!==this.generation)continue;this.discovering=false;this.discoveryError=error;this.dispatchEvent({type:'error',error,phase:'metadata'});this.publish();}
+   }
+  })().finally(()=>{this.discovery=null;if(this.pendingSpec&&!this.disposed)this.pumpDiscovery();this.publish();});
+ }
+ async collectLeaves(spec){
+  const desired=new Map();let empty=0;
+  const walk=async node=>{
+   if(this.disposed||spec.generation!==this.generation)return;
+   if(node.empty){empty++;return;}
+   if(!node.root&&!intersectsRegion(node,spec))return;
+   if(node.leaf){if(node.hasData)desired.set(node.key,node);return;}
+   const outcomes=await Promise.allSettled((await this.source.children(node)).map(walk)),failed=outcomes.find(r=>r.status==='rejected');if(failed)throw failed.reason;
+  };
+  await walk({root:true,epoch:this.planet.epoch});return {desired,empty};
+ }
+ installInventory({desired,empty},spec,final){
+  this.wanted=desired;this.readyCount=0;for(const key of desired.keys())if(this.assets.has(key))this.readyCount++;this.tileQueue=[...desired.values()].sort((a,b)=>a.center.distanceToSquared(spec.focus)-b.center.distanceToSquared(spec.focus));this.tileCursor=0;this.committedSpec=spec;this.emptyLeaves=empty;this.failed.clear();this.capacityBlocked=false;this.discoveryError=null;this.discovering=!final;this.localDiscoveryReady=!final;
+  if(final){
+   const previewPaths=new Map([...this.previewWanted.values()].map(n=>[n.path,n.key]));this.previewForLeaf.clear();this.previewRemaining=new Map([...this.previewWanted.keys()].map(key=>[key,0]));
+   for(const node of desired.values())for(let length=node.path.length-1;length>0;length--){const parent=previewPaths.get(node.path.slice(0,length));if(parent){this.previewForLeaf.set(node.key,parent);if(!this.assets.has(node.key))this.previewRemaining.set(parent,this.previewRemaining.get(parent)+1);break;}}
+  }
+  const paths=new Map([...desired.values()].map(n=>[n.path,n.key]));
+  for(const [key,asset]of this.assets){const samePath=paths.get(asset.descriptor.path);if(asset.expiresAt<=Date.now()||(samePath&&samePath!==key)||(!desired.has(key)&&asset.rootEpoch!==this.planet.epoch))this.unload(key);else if(!desired.has(key)&&!intersectsRegion(asset.descriptor,{...spec,radius:Math.max(this.retainRadiusMeters,spec.radius)}))this.unload(key);else if(desired.has(key))asset.rootEpoch=this.planet.epoch;}
+  if(final)for(const [key,remaining]of this.previewRemaining)if(remaining===0){this.previewWanted.delete(key);this.unload(key);}
+  this.pumpTiles();this.publish();
+ }
+ nextTerminal(){while(this.tileCursor<this.tileQueue?.length){const node=this.tileQueue[this.tileCursor++];if(!this.assets.has(node.key)&&!this.active.has(node.key)&&!this.failed.has(node.key))return node;}return null;}
+ pumpTiles(){
+  if(this.disposed||!this.enabled||this.altitudePaused||this.capacityBlocked)return;
+  while(this.active.size<this.concurrency){
+   let node=this.discovering&&this.localDiscoveryReady?this.nextTerminal():null,preview=false;
+   if(!node)while(this.previewCursor<this.previewQueue.length){const candidate=this.previewQueue[this.previewCursor++];if(this.previewWanted.has(candidate.key)&&!this.previews.has(candidate.key)&&!this.active.has(candidate.key)&&!this.previewFailed.has(candidate.key)){node=candidate;preview=true;break;}}
+   if(!node&&!this.discovering)node=this.nextTerminal();if(!node)break;
+   const task=this.loadTile(node,preview).finally(()=>{this.active.delete(node.key);this.pumpTiles();this.publish();});this.active.set(node.key,task);
+  }
+ }
+ async loadTile(node,preview=false){
+  let asset;
+  try{
+   const decoded=await this.source.loadNode(node);if(this.disposed||!this.enabled||this.altitudePaused)return;
+   await cpuTurn();if(this.disposed||!this.enabled||this.altitudePaused)return;
+   asset=await buildAsset(decoded,node,this.renderer);
+   if(this.disposed||!this.enabled||this.altitudePaused||!(preview?this.previewWanted:this.wanted).has(node.key)){disposeAsset(asset);return;}
+   if(this.gpuBytes+asset.gpuBytes>this.maxGpuBytes)for(const key of this.assets.keys()){if(!this.wanted.has(key))this.unload(key);if(this.gpuBytes+asset.gpuBytes<=this.maxGpuBytes)break;}
+   if(this.gpuBytes+asset.gpuBytes>this.maxGpuBytes){if(!preview)this.capacityBlocked=true;throw new TileError('gpu_budget','GPU budget cannot hold every requested HQ leaf',{path:node.path,budget:this.maxGpuBytes,requiredNext:this.gpuBytes+asset.gpuBytes});}
+   asset.expiresAt=this.transport.getExpiry?.(node.key)??Infinity;asset.rootEpoch=this.planet.epoch;
+   if(preview){this.previews.set(node.key,asset);asset.group.traverse(mesh=>{if(mesh.isMesh){mesh.material.polygonOffset=true;mesh.material.polygonOffsetFactor=1;mesh.material.polygonOffsetUnits=1;}});}
+   else{this.assets.set(node.key,asset);this.readyCount++;const parent=this.previewForLeaf.get(node.key);if(parent){const remaining=this.previewRemaining.get(parent)-1;this.previewRemaining.set(parent,remaining);if(remaining===0){this.previewWanted.delete(parent);this.unload(parent);}}}
+   for(const id of asset.copyrightIds)this.creditCounts.set(id,(this.creditCounts.get(id)??0)+1);this.group.add(asset.group);this.gpuBytes+=asset.gpuBytes;this.dispatchEvent({type:preview?'preview-load':'tile-load',asset});
+  }catch(error){if(asset&&!(preview?this.previews:this.assets).has(node.key))disposeAsset(asset);if(this.disposed||isAbort(error)||!(preview?this.previewWanted:this.wanted).has(node.key))return;if(preview){this.previewFailed.add(node.key);this.dispatchEvent({type:'warning',error,phase:'preview',node});}else{this.failed.set(node.key,error);this.dispatchEvent({type:'error',error,phase:'tile',node});}}
+ }
+ unload(key){const preview=this.previews.has(key),asset=(preview?this.previews:this.assets).get(key);if(!asset)return;this.dispatchEvent({type:preview?'preview-unload':'tile-unload',asset});(preview?this.previews:this.assets).delete(key);if(!preview&&this.wanted.has(key)){this.readyCount--;const parent=this.previewForLeaf.get(key);if(parent)this.previewRemaining.set(parent,(this.previewRemaining.get(parent)??0)+1);}for(const id of asset.copyrightIds){const count=(this.creditCounts.get(id)??0)-1;if(count>0)this.creditCounts.set(id,count);else this.creditCounts.delete(id);}this.gpuBytes-=asset.gpuBytes;disposeAsset(asset);}
+ getCoverage(){
+  const ready=this.readyCount;
+  const complete=!this.disposed&&this.enabled&&!this.altitudePaused&&!this.discovering&&!this.pendingSpec&&!this.discoveryError&&this.failed.size===0&&ready===this.wanted.size&&!!this.lastSpec;
+  return {status:this.disposed?'disposed':!this.enabled?'paused':this.altitudePaused?'waiting-altitude':this.discoveryError||this.failed.size?'incomplete':this.discovering?'discovering':complete?this.wanted.size?'complete':'no-data':'loading',complete,cameraAltitudeMeters:this.cameraAltitudeMeters,activationAltitudeMeters:this.activationAltitudeMeters,epoch:this.planet?.epoch??null,radiusMeters:this.lastSpec?.radius??this.radiusMeters,requiredLeaves:this.wanted.size,readyLeaves:ready,missingLeaves:this.wanted.size-ready,unknownBranches:this.discoveryError?1:0,failedLeaves:this.failed.size,declaredEmptyLeaves:this.emptyLeaves,residentLeaves:this.assets.size,previewTiles:this.previews.size,previewRequired:this.previewWanted.size,gpuBytes:this.gpuBytes,errors:[...(this.discoveryError?[this.discoveryError]:[]),...this.failed.values()].map(e=>({code:e.code??'unavailable',message:e.message,details:e.details??{}})),cachePersistent:this.cache?.persistent??false,cacheWarning:this.cache?.warning??null,...this.transport?.stats};
+ }
+ getAttribution(){const counts=new Map();for(const [id,count]of this.creditCounts){const text=this.credits.get(id);if(text)counts.set(text,(counts.get(text)??0)+count);}return ['Google Earth / Maps',...[...counts].sort((a,b)=>b[1]-a[1]).map(([text])=>text)].join(' · ');}
+ publish(){this.dispatchEvent({type:'progress',coverage:this.getCoverage()});}
+ waitForIdle(timeoutMs=120000){if(this.disposed)return Promise.reject(aborted());return new Promise((resolve,reject)=>{let timer;const check=()=>{if(this.disposed){cleanup();reject(aborted());}else if(!this.discovery&&!this.discovering&&!this.pendingSpec&&this.active.size===0){const result=this.getCoverage();cleanup();resolve(result);}};const cleanup=()=>{clearTimeout(timer);this.removeEventListener('progress',check);};this.addEventListener('progress',check);timer=setTimeout(()=>{cleanup();reject(new TileError('timeout','HQ streaming has not settled',{coverage:this.getCoverage()}));},timeoutMs);check();});}
+ regionOptions(){const s=this.lastSpec;return s?{focusECEF:s.focus,radiusMeters:s.radius,viewDirectionECEF:s.viewDirection,viewHalfAngle:s.viewHalfAngle,nearRadiusMeters:s.nearRadius}:{};}
+ retryFailed(){this.failed.clear();this.discoveryError=null;if(this.lastSpec)return this.requestRegion(this.regionOptions());return Promise.resolve(this.getCoverage());}
+ setGpuBudget(bytes){if(!(bytes>0))throw new TileError('invalid_options','GPU budget must be positive');this.maxGpuBytes=bytes;this.capacityBlocked=false;for(const[key,error]of this.failed)if(error.code==='gpu_budget')this.failed.delete(key);this.tileQueue=[...this.wanted.values()].sort((a,b)=>a.center.distanceToSquared(this.lastSpec.focus)-b.center.distanceToSquared(this.lastSpec.focus));this.tileCursor=0;this.pumpTiles();}
+ setEnabled(enabled){if(this.enabled===!!enabled)return;this.enabled=!!enabled;if(!enabled){this.generation++;this.pendingSpec=null;this.discovering=false;}else if(this.lastSpec&&!this.altitudePaused)this.requestRegion({...this.regionOptions(),waitForCompletion:false}).catch(error=>{if(!isAbort(error))this.dispatchEvent({type:'error',error});});this.publish();}
+ async dispose(){
+  if(this.disposing)return this.disposing;this.disposed=true;this.generation++;this.pendingSpec=null;this.enabled=false;this.publish();
+  this.disposing=(async()=>{if(this.ownsSource)await this.transport.dispose();await Promise.allSettled([...(this.discovery?[this.discovery]:[]),...this.active.values()]);for(const key of [...this.assets.keys(),...this.previews.keys()])this.unload(key);this.wanted.clear();this.previewWanted.clear();this.previewForLeaf.clear();this.previewRemaining.clear();this.previewQueue=[];this.failed.clear();if(this.ownsSource)this.source.clear();if(this.ownsCache)await this.cache.close();this.group.removeFromParent();this.publish();})();return this.disposing;
+ }
+}
