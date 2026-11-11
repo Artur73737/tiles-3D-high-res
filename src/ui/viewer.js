@@ -9,6 +9,9 @@ import {Geocoder} from '../api/geocode.js';
 import {TileEnhancer,enhanceSupported} from '../api/enhance.js';
 import {SharpenPass} from './scene/postfx.js';
 import {createGlobe} from './scene/globe.js';
+import {detectDevice,inputOf,DEVICES} from './input/device.js';
+import {trackGestures} from './input/gestures.js';
+import {createFlyPad} from './input/flypad.js';
 import {createTileStream,cameraEye,MAX_RADIUS_M} from './scene/stream3d.js';
 
 const LAYER_LABEL={s:'satellite',y:'hybrid',h:'labels',m:'roadmap',p:'terrain+',t:'relief',r:'roads',traffic:'traffic',transit:'transit',bike:'bike'};
@@ -211,9 +214,15 @@ export function createViewer(target,options={}){
  function load2d(z,x,y,key){const g=gen2d;pending.add(key);
   client2d.getTile(z,x,y).then(async t=>{const bmp=await win.createImageBitmap(new win.Blob([t.bytes],{type:t.mimeType}));if(g!==gen2d){bmp.close();return;}bitmaps.set(key,{bmp,crop:t.crop,ts:t.tileSize});while(bitmaps.size>800){const k=bitmaps.keys().next().value;bitmaps.get(k).bmp?.close();bitmaps.delete(k);}emit('tile',{mode:'2d',z,x,y});},
    e=>{if(g===gen2d&&e.name!=='AbortError')bitmaps.set(key,{error:e.code==='zoom_range'?'out of range':e.code??'error'});}).finally(()=>{pending.delete(key);if(g===gen2d)draw2d();});}
- {let drag=null;canvas2d.onpointerdown=e=>{drag={x:e.clientX,y:e.clientY};canvas2d.setPointerCapture(e.pointerId);};
+ {let drag=null;canvas2d.onpointerdown=e=>{if(e.pointerType==='touch')return;drag={x:e.clientX,y:e.clientY};canvas2d.setPointerCapture(e.pointerId);};
   canvas2d.onpointermove=e=>{if(!drag)return;const z=state.zoom,c=project(state.lat,state.lon,z),p=unproject(c.x-(e.clientX-drag.x)/256,c.y-(e.clientY-drag.y)/256,z);state.lat=Math.max(-85,Math.min(85,p.lat));state.lon=((p.lon+540)%360)-180;drag={x:e.clientX,y:e.clientY};state.note='';syncCoords();draw2d();};
   canvas2d.onpointerup=canvas2d.onpointercancel=()=>{if(drag)emit('move',getView());drag=null;};
+  // Touch: one or two fingers pan, pinch zooms around the fingers' midpoint.
+  const pan2d=(dx,dy)=>{const z=state.zoom,c=project(state.lat,state.lon,z),p=unproject(c.x-dx/256,c.y-dy/256,z);state.lat=Math.max(-85,Math.min(85,p.lat));state.lon=((p.lon+540)%360)-180;};
+  trackGestures(canvas2d,{onPan:(dx,dy)=>{pan2d(dx,dy);state.note='';syncCoords();draw2d();},
+   onPinch:({scale,x,y})=>{const r=canvas2d.getBoundingClientRect(),mx=x-r.width/2,my=y-r.height/2,c=project(state.lat,state.lon,state.zoom),before=unproject(c.x+mx/256,c.y+my/256,state.zoom);
+    state.zoom=Math.max(cfg.d2.minZoom,Math.min(cfg.d2.overzoom?26:cfg.d2.maxZoom,state.zoom+Math.log2(scale)));const c2=project(before.lat,before.lon,state.zoom),p=unproject(c2.x-mx/256,c2.y-my/256,state.zoom);state.lat=p.lat;state.lon=p.lon;state.note='';syncCoords();draw2d();},
+   onEnd:()=>emit('move',getView())});
   canvas2d.addEventListener('wheel',e=>{e.preventDefault();const r=canvas2d.getBoundingClientRect(),mx=e.clientX-r.left-r.width/2,my=e.clientY-r.top-r.height/2,c=project(state.lat,state.lon,state.zoom),before=unproject(c.x+mx/256,c.y+my/256,state.zoom);
    state.zoom=Math.max(cfg.d2.minZoom,Math.min(cfg.d2.overzoom?26:cfg.d2.maxZoom,state.zoom-Math.sign(e.deltaY)*.5));const c2=project(before.lat,before.lon,state.zoom),p=unproject(c2.x-mx/256,c2.y-my/256,state.zoom);state.lat=p.lat;state.lon=p.lon;state.note='';syncCoords();draw2d();emit('move',getView());},{passive:false});}
  async function findMaxZoom(){status('Probing highest real zoom');const r=await client2d.findMaxZoom(state.lat,state.lon);if(r.z===null){status('No real imagery here','warn');return null;}state.note='max real zoom '+r.z;state.maxReal=r.z;state.maxRealKey='';state.zoom=r.z;syncCoords();if(state.view==='globe')globe.enter(state.mode,{lat:state.lat,lon:state.lon,zoom:r.z});else draw2d();updateEnhanceUi();emit('maxzoom',{zoom:r.z});return r.z;}
@@ -267,7 +276,7 @@ export function createViewer(target,options={}){
   if($('status').className!=='err')status(`${state.mode==='fly'?'FLY':'3D '}   ${stats3d.done}/${stats3d.total} tiles${stats3d.errors?'   '+stats3d.errors+' errors':''}${stats3d.best?'   '+(stats3d.best*100).toFixed(1)+' cm/texel':''}   resident ${stats3d.resident}   net ${s.networkRequests}  ${(s.receivedBytes/1048576).toFixed(1)} MiB   cache ${s.memoryHits+s.diskHits}${state.mode==='fly'?`   alt ${(camera.position.z-(origin?.ground??0)).toFixed(0)} m   ${cfg.d3.flySpeed.toFixed(0)} m/s`:''}`,stats3d.errors?'warn':'');},500);
  const keys=new Set();let yaw=0,pitch=-.25,last=win.performance.now();
  const sharpen=new SharpenPass(renderer,{sharpness:cfg.enhance.sharpness3d});
- const globe=createGlobe({win,view,camera,cfg,keys,dpr,tileTexels:()=>client2d?.tileSize??256,getClient3d:()=>client3d,makeMesh,disposeMesh,settings3d,pixelAngle,
+ const globe=createGlobe({win,view,camera,cfg,keys,dpr,tileTexels:()=>client2d?.tileSize??256,getClient3d:()=>client3d,makeMesh,disposeMesh,settings3d,pixelAngle,flyPad:()=>flyPad.state,
   textureOutput,tileImage,onTile:e=>emit('tile',e),onError:e=>{emit('error',e);},onMove:()=>{const v=globe.getView();state.lat=v.lat;state.lon=v.lon;state.zoom=v.zoom;syncCoords();},onFlySpeed:()=>controls.get('d3.flySpeed')?.ctl.set(cfg.d3.flySpeed)});
  win.addEventListener('keydown',e=>{if(e.target.tagName==='INPUT')return;keys.add(e.code);});win.addEventListener('keyup',e=>keys.delete(e.code));win.addEventListener('blur',()=>keys.clear());
  view.addEventListener('click',()=>{if(state.view==='flat'&&state.mode==='fly')view.requestPointerLock?.();});
@@ -275,6 +284,21 @@ export function createViewer(target,options={}){
  view.addEventListener('wheel',e=>{if(state.view!=='flat'||state.mode!=='fly')return;cfg.d3.flySpeed=Math.max(1,Math.min(2000,Math.round(cfg.d3.flySpeed*(e.deltaY<0?1.2:1/1.2))));controls.get('d3.flySpeed')?.ctl.set(cfg.d3.flySpeed);},{passive:true});
  function resize(){draw2d();const w=view.clientWidth,h=view.clientHeight;if(!w||!h)return;renderer.setPixelRatio(dpr());renderer.setSize(w,h,false);camera.aspect=w/h;camera.updateProjectionMatrix();}
  const ro=new win.ResizeObserver(resize);ro.observe($('stage'));
+ // ---------- touch devices ----------
+ const flyPad=createFlyPad($('stick'),$('knob'),$('flyUp'),$('flyDown'));
+ // Flat fly on touch: drag the view to look around (the world follows the finger).
+ trackGestures(view,{filter:e=>e.pointerType==='touch'&&state.view==='flat'&&state.mode==='fly',onPan:(dx,dy)=>{yaw+=dx*.005;pitch=Math.max(-1.55,Math.min(1.55,pitch+dy*.005));}});
+ let device='desktop',hintTimer=0;
+ // Touch hints show for a few seconds after a view or mode change, then fade out.
+ function showHints(){if(app.dataset.input!=='touch')return;app.classList.add('hints-on');win.clearTimeout(hintTimer);hintTimer=win.setTimeout(()=>app.classList.remove('hints-on'),6000);}
+ const header=doc.querySelector('header'),placeDrawers=()=>app.style.setProperty('--top',(header.getBoundingClientRect().bottom+4)+'px');
+ new win.ResizeObserver(placeDrawers).observe(header);
+ function applyDevice(next){
+  next=detectDevice(win,next??options.device??'auto');const changed=next!==device;device=next;app.dataset.device=device;app.dataset.input=inputOf(device);
+  if(changed){if(device!=='desktop'){togglePanel(false);toggleLayers(false);}else{togglePanel(options.panel!==false);toggleLayers(options.layersPanel!==false);}flyPad.reset();showHints();placeDrawers();win.requestAnimationFrame(resize);emit('device',device);}
+  return device;}
+ $('scrim').addEventListener('click',()=>{togglePanel(false);toggleLayers(false);});
+ win.addEventListener('resize',()=>{if((options.device??'auto')==='auto')applyDevice();placeDrawers();});
  // Frames per second of the viewer loop, shown in the footer.
  let fpsFrames=0,fpsSince=win.performance.now(),fps=0;const fpsEl=$('fps');
  renderer.setAnimationLoop(()=>{const now=win.performance.now(),dt=Math.min(.1,(now-last)/1000);last=now;updateNeedle();tiles.tick(now);
@@ -283,7 +307,8 @@ export function createViewer(target,options={}){
   if(state.mode==='2d')return;
   if(state.mode==='fly'){const fwd=new THREE.Vector3(-Math.sin(yaw)*Math.cos(pitch),Math.cos(yaw)*Math.cos(pitch),Math.sin(pitch)),right=new THREE.Vector3(Math.cos(yaw),Math.sin(yaw),0),v=new THREE.Vector3(),k=(keys.has('ShiftLeft')||keys.has('ShiftRight')?4:1)*cfg.d3.flySpeed*dt;
    if(keys.has('KeyW'))v.add(fwd);if(keys.has('KeyS'))v.sub(fwd);if(keys.has('KeyD'))v.add(right);if(keys.has('KeyA'))v.sub(right);if(keys.has('KeyE')||keys.has('Space'))v.z+=1;if(keys.has('KeyQ')||keys.has('ControlLeft'))v.z-=1;
-   if(v.lengthSq())camera.position.addScaledVector(v.normalize(),k);
+   if(v.lengthSq())v.normalize();const pad=flyPad.state;v.addScaledVector(fwd,pad.y).addScaledVector(right,pad.x);v.z+=(pad.up?1:0)-(pad.down?1:0);if(v.lengthSq()>1)v.normalize();
+   if(v.lengthSq())camera.position.addScaledVector(v,k);
    const hit=new THREE.Raycaster(new THREE.Vector3(camera.position.x,camera.position.y,camera.position.z+500),new THREE.Vector3(0,0,-1),0,2000).intersectObjects(world.children,true)[0];if(hit&&camera.position.z<hit.point.z+1.7)camera.position.z=hit.point.z+1.7;
    camera.lookAt(camera.position.clone().add(fwd));}else orbit.update();
   if(active3d()){sharpen.setSharpness(cfg.enhance.sharpness3d);sharpen.render(scene,camera);}else renderer.render(scene,camera);});
@@ -317,7 +342,7 @@ export function createViewer(target,options={}){
   status('GLOBE '+(state.mode==='fly'?'FLY':state.mode.toUpperCase())+'   alt '+alt+'   2D z'+g.finestZoom+' '+g.patches+'/'+g.wanted+' patches'+(state.mode!=='2d'?(v.altitude>g.activation?'   3D below '+g.activation+' m':'   3D '+g.mesh.done+'/'+g.mesh.total+' tiles'+(g.mesh.best?'  '+(g.mesh.best*100).toFixed(1)+' cm/texel':'')+(g.mesh.errors?'  '+g.mesh.errors+' errors':'')):'')+(s3?'   net '+s3.networkRequests:'')+(active2d()&&state.mode==='2d'?'   ENHANCED '+cfg.enhance.upscale2d+'x':'')+(active3d()?'   CAS':''),g.mesh.errors?'warn':'');}
  function setView(v){if(!['flat','globe'].includes(v))throw new Error("view must be 'flat' or 'globe'");if(v===state.view)return controller;
   if(state.view==='globe'){const gv=globe.getView();state.lat=gv.lat;state.lon=gv.lon;state.zoom=Math.min(gv.zoom,22);globe.leave();}else clear3d();
-  state.view=v;app.dataset.view=v;for(const b of doc.querySelectorAll('header [data-view]'))b.classList.toggle('on',b.dataset.view===v);origin=null;
+  state.view=v;app.dataset.view=v;showHints();for(const b of doc.querySelectorAll('header [data-view]'))b.classList.toggle('on',b.dataset.view===v);origin=null;
   if(v==='globe'){groundFor(state.lat,state.lon);}camera.up.set(0,0,1);
   setMode(state.mode);if(v==='flat'&&state.mode==='2d')draw2d();emit('view',v);return controller;}
  // ---------- zoom / north controls ----------
@@ -337,7 +362,7 @@ export function createViewer(target,options={}){
  const needle=$('needle');let lastNeedle=NaN;function updateNeedle(){const h=Math.round(currentHeading()*10)/10;if(h!==lastNeedle){lastNeedle=h;needle.style.transform='rotate('+(-h)+'deg)';$('north').title='Heading '+h.toFixed(0)+'°  reset north';}}
  // ---------- header / modes ----------
  const syncCoords=()=>{};
- function setMode(mode){if(!['2d','3d','fly'].includes(mode))throw new Error("mode must be '2d', '3d' or 'fly'");const prev=state.mode;state.mode=mode;app.dataset.mode=mode;
+ function setMode(mode){if(!['2d','3d','fly'].includes(mode))throw new Error("mode must be '2d', '3d' or 'fly'");const prev=state.mode;state.mode=mode;app.dataset.mode=mode;flyPad.reset();showHints();
   if(state.view==='globe'){for(const b of doc.querySelectorAll('header [data-mode]'))b.classList.toggle('on',b.dataset.mode===mode);orbit.enabled=false;if(doc.pointerLockElement)doc.exitPointerLock();win.requestAnimationFrame(resize);
    if(mode!=='2d'&&!client3d)safe(()=>{client3d=build3d();});globe.enter(mode,{lat:state.lat,lon:state.lon,zoom:state.zoom});emit('mode',mode);return controller;}
   for(const b of doc.querySelectorAll('[data-mode]'))if(b!==app)b.classList.toggle('on',b.dataset.mode===mode);orbit.enabled=mode==='3d';if(mode!=='fly'&&doc.pointerLockElement)doc.exitPointerLock();
@@ -360,8 +385,8 @@ export function createViewer(target,options={}){
   // Enhancement settings are live post-processing: they never rebuild clients or reload tiles.
   if(Object.keys(patch).every(g=>g==='enhance')){syncControls();enhanceChanged();return controller;}
   syncControls();const ok=apply();if(!ok)throw new Error($('status').textContent);return controller;}
- function togglePanel(open){const want=open??app.classList.contains('no-right');app.classList.toggle('no-right',!want);$('toggle').classList.toggle('on',want);return controller;}
- function toggleLayers(open){const want=open??app.classList.contains('no-left');app.classList.toggle('no-left',!want);$('toggleLeft').classList.toggle('on',want);return controller;}
+ function togglePanel(open){const want=open??app.classList.contains('no-right');if(want&&app.dataset.input==='touch'&&!app.classList.contains('no-left'))toggleLayers(false);app.classList.toggle('no-right',!want);$('toggle').classList.toggle('on',want);return controller;}
+ function toggleLayers(open){const want=open??app.classList.contains('no-left');if(want&&app.dataset.input==='touch'&&!app.classList.contains('no-right'))togglePanel(false);app.classList.toggle('no-left',!want);$('toggleLeft').classList.toggle('on',want);return controller;}
 
  buildPanel();
  for(const b of doc.querySelectorAll('header [data-mode]'))b.onclick=()=>setMode(b.dataset.mode);
@@ -395,9 +420,10 @@ export function createViewer(target,options={}){
  $('reset').onclick=()=>{Object.assign(cfg,clone(VIEWER_DEFAULTS));for(const g of Object.keys(cfg))Object.assign(cfg[g],clone(options[g]??{}));syncControls();apply();};
  $('clear').onclick=async()=>{await Promise.all([client2d?.clearCache(),client3d?.clearCache()]);status('Cache cleared');apply();};
  if(options.panel===false)togglePanel(false);if(options.layersPanel===false)toggleLayers(false);
+ applyDevice();
  controller={iframe,window:win,document:doc,
   get tiles2d(){return client2d;},get tiles3d(){return client3d;},get mode(){return state.mode;},
-  zoomIn:()=>zoomStep(1),zoomOut:()=>zoomStep(-1),resetNorth,getHeading:()=>currentHeading(),toggleLayers,searchPlaces,setGeocoder:o=>{geocoder.set(o);results=[];resultsFor=null;return controller;},geocoder,setMode,setView,goTo,set,apply,getConfig,getView,togglePanel,findMaxZoom,exportPNG,getEnhanceState,setEnhance:(e)=>set({enhance:e}),get view(){return state.view;},globe,
+  zoomIn:()=>zoomStep(1),zoomOut:()=>zoomStep(-1),resetNorth,getHeading:()=>currentHeading(),toggleLayers,searchPlaces,getDevice:()=>device,setDevice:d=>{if(d!=='auto'&&!DEVICES.includes(d))throw new Error('device must be auto, '+DEVICES.join(', '));options.device=d;applyDevice(d);return controller;},setGeocoder:o=>{geocoder.set(o);results=[];resultsFor=null;return controller;},geocoder,setMode,setView,goTo,set,apply,getConfig,getView,togglePanel,findMaxZoom,exportPNG,getEnhanceState,setEnhance:(e)=>set({enhance:e}),get view(){return state.view;},globe,
   getFps:()=>fps,getStats:()=>({fps,globe:state.view==='globe'?globe.stats():null,enhancer:enhancer?.stats??null,view:getView(),tiles2d:client2d?.getStats()??null,tiles3d:client3d?.getStats()??null,mesh:tiles.stats(),loaded2d:[...bitmaps.values()].filter(b=>b.bmp).length}),
   on(type,fn){if(!listeners.has(type))listeners.set(type,new Set());listeners.get(type).add(fn);return ()=>listeners.get(type).delete(fn);},
   off(type,fn){listeners.get(type)?.delete(fn);},

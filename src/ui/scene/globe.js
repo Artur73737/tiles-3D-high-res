@@ -4,6 +4,7 @@
 import * as THREE from 'three';
 import {geoToECEF} from '../../core/geo.js';
 import {createTileStream,cameraEye} from './stream3d.js';
+import {trackGestures} from '../input/gestures.js';
 const R=6371010,C=40075016.686,DEG=Math.PI/180,TILE_PX=256,EDGE=0.004;
 const ecef=(lat,lon,alt=0)=>{const p=geoToECEF(lat,lon,alt,R);return new THREE.Vector3(p.x,p.y,p.z);};
 export function enuFrame(lat,lon,alt=0){const e=new THREE.Vector3(-Math.sin(lon*DEG),Math.cos(lon*DEG),0),up=ecef(lat,lon,0).normalize(),n=new THREE.Vector3().crossVectors(up,e);return {e,n,up,m:new THREE.Matrix4().makeBasis(e,n,up).setPosition(up.clone().multiplyScalar(R+alt))};}
@@ -38,12 +39,19 @@ export function createGlobe(ctx){
 
  // ---------- input (screen-aligned: content follows the pointer at any heading) ----------
  let drag=null;
- view.addEventListener('pointerdown',e=>{if(!active||mode==='fly')return;drag={x:e.clientX,y:e.clientY,rot:e.button===2||e.ctrlKey||e.shiftKey};view.setPointerCapture(e.pointerId);});
+ view.addEventListener('pointerdown',e=>{if(!active||mode==='fly'||e.pointerType==='touch')return;drag={x:e.clientX,y:e.clientY,rot:e.button===2||e.ctrlKey||e.shiftKey};view.setPointerCapture(e.pointerId);});
  view.addEventListener('pointermove',e=>{if(!drag)return;const dx=e.clientX-drag.x,dy=e.clientY-drag.y;drag.x=e.clientX;drag.y=e.clientY;
   if(drag.rot){nav.heading=(nav.heading-dx*.25+360)%360;nav.tilt=Math.max(0,Math.min(85,nav.tilt-dy*.25));}
   else{const mpp=nav.dist/focal(),h=nav.heading*DEG,east=(-dx*Math.cos(h)+dy*Math.sin(h))*mpp,north=(dx*Math.sin(h)+dy*Math.cos(h))*mpp;
    nav.lat=Math.max(-85,Math.min(85,nav.lat+north/111320));nav.lon=((nav.lon+east/(111320*Math.max(.01,Math.cos(nav.lat*DEG)))+540)%360)-180;}
   dirty=true;ctx.onMove?.();});
+ // Touch: one finger pans (or looks around in fly), pinch zooms, twist rotates, two-finger drag tilts.
+ const panBy=(dx,dy)=>{const mpp=nav.dist/focal(),h=nav.heading*DEG,east=(-dx*Math.cos(h)+dy*Math.sin(h))*mpp,north=(dx*Math.sin(h)+dy*Math.cos(h))*mpp;
+  nav.lat=Math.max(-85,Math.min(85,nav.lat+north/111320));nav.lon=((nav.lon+east/(111320*Math.max(.01,Math.cos(nav.lat*DEG)))+540)%360)-180;};
+ trackGestures(view,{filter:e=>active&&e.pointerType==='touch',
+  onPan:(dx,dy,n)=>{if(mode==='fly'){if(n===1){fly.yaw-=dx*.005;fly.pitch=Math.max(-1.55,Math.min(1.55,fly.pitch+dy*.005));}return;}
+   if(n===1)panBy(dx,dy);else nav.tilt=Math.max(0,Math.min(85,nav.tilt-dy*.3));dirty=true;ctx.onMove?.();},
+  onPinch:({scale,rotate})=>{if(mode==='fly')return;nav.heading=(nav.heading-rotate/DEG+360)%360;zoomBy(1/scale);}});
  view.addEventListener('pointerup',()=>{drag=null;});view.addEventListener('contextmenu',e=>{if(active)e.preventDefault();});
  view.addEventListener('wheel',e=>{if(!active)return;e.preventDefault();zoomBy(e.deltaY<0?1/1.15:1.15);},{passive:false});
  view.addEventListener('click',()=>{if(active&&mode==='fly')view.requestPointerLock?.();});
@@ -115,7 +123,9 @@ export function createGlobe(ctx){
   if(!active)return;tiles.tick(win.performance.now());
   if(mode==='fly'){const {f,fwd,right}=flyBasis(),v=new THREE.Vector3(),alt=Math.max(1,fly.pos.length()-R),k=(keys.has('ShiftLeft')||keys.has('ShiftRight')?4:1)*cfg.d3.flySpeed*Math.max(1,alt/300)*dt;
    if(keys.has('KeyW'))v.add(fwd);if(keys.has('KeyS'))v.sub(fwd);if(keys.has('KeyD'))v.add(right);if(keys.has('KeyA'))v.sub(right);if(keys.has('KeyE')||keys.has('Space'))v.add(f.up);if(keys.has('KeyQ')||keys.has('ControlLeft'))v.sub(f.up);
-   if(v.lengthSq()){fly.pos.addScaledVector(v.normalize(),k);dirty=true;}
+   // Keys give full speed; the touch stick is analog. Combined input never exceeds full speed.
+   if(v.lengthSq())v.normalize();const pad=ctx.flyPad?.();if(pad){v.addScaledVector(fwd,pad.y).addScaledVector(right,pad.x).addScaledVector(f.up,(pad.up?1:0)-(pad.down?1:0));}if(v.lengthSq()>1)v.normalize();
+   if(v.lengthSq()){fly.pos.addScaledVector(v,k);dirty=true;}
    const up=fly.pos.clone().normalize(),hit=surfaceHit(fly.pos.clone().addScaledVector(up,500),up.clone().negate(),3000),floor=hit?hit.point.length():R+ground+2;
    if(fly.pos.length()<floor+1.7)fly.pos.setLength(floor+1.7);
    const b=flyBasis();camera.position.copy(fly.pos);camera.up.copy(b.f.up);camera.lookAt(fly.pos.clone().add(b.fwd));}

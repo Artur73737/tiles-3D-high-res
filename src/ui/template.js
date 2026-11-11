@@ -70,7 +70,46 @@ h3 button{height:22px;padding:0 9px;font-size:10px}
 .hk kbd{font:inherit;font-size:10px;color:var(--hi);min-width:18px;height:17px;padding:0 5px;display:inline-flex;align-items:center;justify-content:center;background:#262626;border-bottom:1px solid #444;border-radius:4px;letter-spacing:.04em}.hk i{font-style:normal;color:#8a8a8a;margin:0 -2px}.hk em{font-style:normal;margin-left:2px}
 /* Crosshair: the backdrop under each line is inverted and thresholded, so it is light over dark imagery and dark over light imagery. */
 .cross{position:absolute;left:50%;top:50%;width:13px;height:13px;margin:-6px 0 0 -6px;pointer-events:none;z-index:1}.cross:before,.cross:after{content:'';position:absolute;background:transparent;-webkit-backdrop-filter:invert(1) grayscale(1) contrast(100);backdrop-filter:invert(1) grayscale(1) contrast(100)}.cross:before{left:6px;top:0;width:1px;height:13px}.cross:after{left:0;top:6px;width:13px;height:1px}
-@media (max-width:820px){.side{position:absolute;top:48px;bottom:0;z-index:6;width:min(300px,86vw)}#left{left:0}#right{right:0}.center{grid-column:1/4!important}.search{width:200px}}
+@media (max-width:820px){.app[data-input="mouse"] .side{position:absolute;top:48px;bottom:0;z-index:6;width:min(300px,86vw)}.app[data-input="mouse"] #left{left:0}.app[data-input="mouse"] #right{right:0}.app[data-input="mouse"] .center{grid-column:1/4!important}.app[data-input="mouse"] .search{width:200px}}
+/* ---------- touch devices (tablet, mobile). Desktop rules above are unchanged. ---------- */
+.flypad,.scrim,.help.touch{display:none}
+.app[data-input="touch"]{--h:38px;grid-template-rows:auto minmax(0,1fr)}
+html:has(.app[data-input="touch"]),body:has(.app[data-input="touch"]){overscroll-behavior:none;-webkit-tap-highlight-color:transparent;-webkit-text-size-adjust:100%}
+.app[data-input="touch"] button{font-size:12px;touch-action:manipulation}
+.app[data-input="touch"] input{font-size:16px}
+.app[data-input="touch"] header{flex-wrap:wrap;overflow:visible;padding:7px 8px;gap:7px;user-select:none;-webkit-user-select:none}
+.app[data-input="touch"] .brand{display:none}
+.app[data-input="touch"] #toggleLeft{order:1}.app[data-input="touch"] .search{order:2;flex:1 1 0;width:auto;min-width:0}.app[data-input="touch"] #toggle{order:3}
+.app[data-input="touch"] .grow{order:4;flex-basis:100%;height:0}
+.app[data-input="touch"] header .group{order:5;flex:1 1 auto}.app[data-input="touch"] header .group>*{flex:1}
+.app[data-input="touch"] header .group.m2{order:6}
+.app[data-device="tablet"] header .group{flex:0 1 auto}.app[data-device="tablet"] header .group>*{flex:none;min-width:64px}
+.app[data-input="touch"] .center{grid-column:1/4!important}
+.app[data-input="touch"] .stage,.app[data-input="touch"] footer{border-radius:0;border-left:0;border-right:0}
+.app[data-input="touch"] footer{padding:0 10px}
+/* sidebars become drawers over the view; one open at a time, tapping the scrim closes them */
+.app[data-input="touch"] .side{position:fixed;top:var(--top,96px);bottom:0;z-index:30;width:min(340px,88vw);overscroll-behavior:contain;-webkit-overflow-scrolling:touch;box-shadow:0 0 32px rgba(0,0,0,.6)}
+.app[data-input="touch"] #left{left:0;border-radius:0 var(--r) 0 0}
+.app[data-input="touch"] #right{right:0;border-radius:var(--r) 0 0 0}
+.app[data-input="touch"] .scrim{position:fixed;left:0;right:0;bottom:0;top:var(--top,96px);z-index:25;background:rgba(0,0,0,.5)}
+.app[data-input="touch"]:not(.no-left) .scrim,.app[data-input="touch"]:not(.no-right) .scrim{display:block}
+.app[data-input="touch"] .row{grid-template-columns:112px minmax(0,1fr);margin-bottom:8px}.app[data-input="touch"] .checks{gap:12px 10px}
+.app[data-input="touch"] .box{width:16px;height:16px}.app[data-input="touch"] .menu li{height:40px}
+.app[data-input="touch"] .menu{max-height:min(320px,50vh)}
+/* overlays in the view */
+.app[data-input="touch"] .navctl{right:12px;bottom:12px}.app[data-input="touch"] .navctl button{width:44px;height:44px;font-size:18px}
+/* touch hints replace the mouse ones; mode / view classes still decide which one shows */
+.app[data-input="touch"] .help:not(.touch){display:none!important}
+.app[data-input="touch"] .help.touch{display:flex;right:66px;transition:opacity .4s}.app[data-input="touch"]:not(.hints-on) .help.touch{opacity:0}
+.app[data-input="touch"] .hk{height:28px;font-size:12px}
+.app[data-input="touch"][data-mode="fly"] .flypad{display:flex}
+.flypad{position:absolute;left:14px;bottom:14px;align-items:flex-end;gap:12px;z-index:3;touch-action:none;user-select:none;-webkit-user-select:none}
+.stick{width:124px;height:124px;border-radius:50%;background:rgba(12,12,12,.6);border:1px solid #3a3a3a;position:relative;backdrop-filter:blur(4px);touch-action:none}
+.stick i{position:absolute;left:50%;top:50%;width:50px;height:50px;margin:-25px;border-radius:50%;background:rgba(255,255,255,.88);box-shadow:0 2px 10px rgba(0,0,0,.5);pointer-events:none}
+.updown{display:flex;flex-direction:column;gap:8px}.updown button{width:50px;height:50px;padding:0;font-size:16px;background:rgba(8,8,8,.82);backdrop-filter:blur(4px)}
+/* short landscape screens (phone on its side): one header row so the view keeps its height */
+@media (orientation:landscape) and (max-height:500px){.app[data-input="touch"]{--h:36px}.app[data-input="touch"] header{flex-wrap:nowrap;padding:5px 8px;gap:6px}.app[data-input="touch"] .grow{display:none}.app[data-input="touch"] header .group{order:2;flex:none}.app[data-input="touch"] header .group>*{flex:none;padding:0 10px}.app[data-input="touch"] .search{order:3;min-width:120px}.app[data-input="touch"] header .group.m2{order:4}.app[data-input="touch"] #toggle{order:5}}
+@media (orientation:landscape) and (max-height:500px){.app[data-input="touch"] .stick{width:104px;height:104px}.app[data-input="touch"] .updown button{width:44px;height:44px}}
 `;
 export const HTML=`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Tiles</title><style>${CSS}</style></head><body>
 <div class="app" id="app" data-mode="2d">
@@ -91,9 +130,15 @@ export const HTML=`<!doctype html><html lang="en"><head><meta charset="utf-8"><m
   <div class="help m2 vf"><span class="hk"><kbd>Drag</kbd><em>pan</em></span><span class="hk"><kbd>Wheel</kbd><em>zoom</em></span></div>
   <div class="help nf vg"><span class="hk"><kbd>Drag</kbd><em>pan</em></span><span class="hk"><kbd>Right drag</kbd><em>rotate + tilt</em></span><span class="hk"><kbd>Shift</kbd><i>/</i><kbd>Drag</kbd><em>rotate + tilt</em></span><span class="hk"><kbd>Wheel</kbd><em>zoom</em></span></div>
   <div class="help mf vg"><span class="hk"><kbd>Click</kbd><em>capture mouse</em></span><span class="hk"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd><em>move</em></span><span class="hk"><kbd>E</kbd><i>/</i><kbd>Space</kbd><em>up</em></span><span class="hk"><kbd>Q</kbd><i>/</i><kbd>Ctrl</kbd><em>down</em></span><span class="hk"><kbd>Shift</kbd><em>×4 speed</em></span><span class="hk"><kbd>Wheel</kbd><em>set speed</em></span><span class="hk"><kbd>Esc</kbd><em>release</em></span></div>
+  <div class="help touch m2 vf"><span class="hk"><kbd>Drag</kbd><em>pan</em></span><span class="hk"><kbd>Pinch</kbd><em>zoom</em></span></div>
+  <div class="help touch m3 nf vf"><span class="hk"><kbd>Drag</kbd><em>orbit</em></span><span class="hk"><kbd>Pinch</kbd><em>zoom</em></span><span class="hk"><kbd>2-finger drag</kbd><em>pan</em></span></div>
+  <div class="help touch nf vg"><span class="hk"><kbd>Drag</kbd><em>pan</em></span><span class="hk"><kbd>Pinch</kbd><em>zoom</em></span><span class="hk"><kbd>Twist</kbd><em>rotate</em></span><span class="hk"><kbd>2-finger drag</kbd><em>tilt</em></span></div>
+  <div class="help touch mf"><span class="hk"><kbd>Stick</kbd><em>move</em></span><span class="hk"><kbd>Drag</kbd><em>look</em></span><span class="hk"><kbd>▲</kbd><i>/</i><kbd>▼</kbd><em>up / down</em></span></div>
+  <div class="flypad" id="flypad"><div class="stick" id="stick"><i id="knob"></i></div><div class="updown"><button id="flyUp" type="button" aria-label="Fly up">▲</button><button id="flyDown" type="button" aria-label="Fly down">▼</button></div></div>
   <div class="help m3 vf"><span class="nf"><span class="hk"><kbd>Drag</kbd><em>orbit</em></span><span class="hk"><kbd>Right drag</kbd><em>pan</em></span><span class="hk"><kbd>Wheel</kbd><em>zoom</em></span></span><span class="mf"><span class="hk"><kbd>Click</kbd><em>capture mouse</em></span><span class="hk"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd><em>move</em></span><span class="hk"><kbd>E</kbd><i>/</i><kbd>Space</kbd><em>up</em></span><span class="hk"><kbd>Q</kbd><i>/</i><kbd>Ctrl</kbd><em>down</em></span><span class="hk"><kbd>Shift</kbd><em>×4 speed</em></span><span class="hk"><kbd>Wheel</kbd><em>set speed</em></span><span class="hk"><kbd>Esc</kbd><em>release</em></span></span></div>
  </div>
  <footer><span id="status">Starting</span><span id="fps">— fps</span></footer>
 </div>
 <aside class="side" id="right" aria-label="Options"></aside>
+<div class="scrim" id="scrim"></div>
 </div></body></html>`;

@@ -62,6 +62,22 @@ It accepts `?view=flat|globe&mode=2d|3d|fly&lat=..&lon=..&zoom=..`.
 </script>
 ```
 
+### Phones and tablets
+
+The viewer detects the device (`desktop`, `tablet` or `mobile`) and adapts:
+
+- The sidebars become drawers over the map.
+- The navbar is compact, and touch targets are larger.
+- Touch gestures:
+  - 2D: drag to pan, pinch to zoom.
+  - 3D: drag to orbit, two fingers to pan.
+  - Globe: drag to pan, pinch to zoom, twist to rotate, two-finger drag to tilt.
+- Fly mode has an on-screen stick, up / down buttons, and drag to look around.
+
+Desktop is unchanged. To force a device class, pass `createViewer(target, { device: 'mobile' })` or
+call `viewer.setDevice('tablet')`. `viewer.getDevice()` returns the current class, and the `device`
+event fires when it changes.
+
 Other controller methods: `zoomIn()`, `zoomOut()`, `resetNorth()`, `searchPlaces(text)`,
 `setGeocoder({...})`, `setEnhance({...})`, `exportPNG()`, `getView()`, `getStats()`, `getFps()`.
 
