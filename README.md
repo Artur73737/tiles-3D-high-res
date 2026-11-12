@@ -48,7 +48,7 @@ It accepts `?view=flat|globe&mode=2d|3d|fly&lat=..&lon=..&zoom=..`.
     panel: true,             // right sidebar (options)
     layersPanel: true,       // left sidebar (layers + enhance)
     d2: { layers: ['s', 'h'], scale: 2, language: 'en' },
-    d3: { radiusMeters: 500, fullDetailMeters: 150, keepTiles: null }, // keepTiles: null = by device
+    d3: { radiusMeters: 500, fullDetailMeters: 150, dropDistanceMeters: 3000, gpuBudgetMb: 8192 },
     network: { concurrency: 12, retries: 2 },
     cache: { mode: 'persistent', diskMb: 1024 },
   });
@@ -62,12 +62,15 @@ It accepts `?view=flat|globe&mode=2d|3d|fly&lat=..&lon=..&zoom=..`.
 </script>
 ```
 
-Loaded 3D tiles stay when the camera moves or turns. A tile is removed only in two cases:
+Loaded 3D tiles stay when the camera moves or turns. A tile is removed only in three cases:
 
 - It is replaced by tiles covering the same ground. Detail never goes down, and a coarse tile stays
   until all of its finer tiles are ready.
-- More than `keepTiles` tiles are loaded. The default is 8000 on desktop, 4000 on tablet and 2500 on
-  phone, about 93 KB of GPU memory each. The farthest tiles go first.
+- It is farther than  from you (3000 by default).
+- The loaded tiles use more than  of GPU memory, measured on the actual buffers and
+  textures. The farthest tiles go first. Browsers do not report VRAM, so the default is conservative:
+  2048 MB on desktop, 512 MB on tablet, 256 MB on phone. Raise it to match your GPU (for example 8192
+  on a 12 GB card).
 
 ### Phones and tablets
 

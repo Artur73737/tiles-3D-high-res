@@ -12,7 +12,8 @@
 //
 // Loaded tiles never disappear because the camera moved or turned:
 // - a tile stays loaded until it is replaced by tiles that cover the same ground, or until more
-//   than keepTiles are loaded (then the farthest tiles no longer needed go first);
+//   when it is farther than dropDistanceMeters from you, or when loaded tiles exceed gpuBudgetMb
+//   (then the farthest tiles no longer needed go first);
 // - detail never goes down: a wanted coarse tile whose area is already fully covered by loaded finer
 //   tiles is not downloaded, the finer ones stay;
 // - a loaded coarse tile is removed only once every wanted finer tile under it is ready, so the
@@ -53,12 +54,12 @@ export function createTileStream(o){
  let pending=[],client=null,epoch=0,listing=0,last=null,stats=empty();
  // want: paths of the current listing. covered: wanted paths satisfied by loaded finer tiles.
  // waiting: loaded coarse path -> wanted finer paths under it that are not loaded yet.
- let want=new Set(),covered=new Set(),waiting=new Map(),focusPoint=null;
+ let want=new Set(),covered=new Set(),waiting=new Map(),focusPoint=null,bytes=0;
  function empty(){return {done:0,total:0,errors:0,best:null,reached:false};}
  const settings=()=>{const s=o.settings();return {...s,radiusMeters:Math.min(MAX_RADIUS_M,s.radiusMeters)};};
  const isAncestor=(a,b)=>b.length>a.length&&b.startsWith(a);
 
- function drop(path){const m=loaded.get(path);if(!m)return;fade.remove(m);o.group.remove(m);o.disposeMesh(m);loaded.delete(path);waiting.delete(path);}
+ function drop(path){const m=loaded.get(path);if(!m)return;bytes-=m.userData.gpuBytes??0;fade.remove(m);o.group.remove(m);o.disposeMesh(m);loaded.delete(path);waiting.delete(path);}
  function clear(){epoch++;listing++;focusPoint=null;for(const c of inflight.values())c.abort();inflight.clear();pending=[];for(const p of [...loaded.keys()])drop(p);last=null;stats=empty();want=new Set();covered=new Set();waiting=new Map();}
 
  // True when loaded tiles at or below d cover its whole area (metadata walk, no payload).
@@ -71,18 +72,23 @@ export function createTileStream(o){
   return true;
  }
 
- // Removes loaded tiles that are no longer needed: coarse tiles whose wanted finer tiles are all ready,
- // and, above keepTiles, the farthest tiles that neither are wanted nor stand in for a wanted one.
+ // GPU bytes of a tile mesh: vertex / index buffers plus textures (compressed size for DXT).
+ function gpuBytes(m){let n=0;const seen=new Set();m.traverse(x=>{if(!x.isMesh)return;for(const at of Object.values(x.geometry.attributes))n+=at.array.byteLength;if(x.geometry.index)n+=x.geometry.index.array.byteLength;
+  const t=x.material?.map;if(t&&!seen.has(t)){seen.add(t);const mip=t.mipmaps?.[0];n+=mip?.data?mip.data.byteLength:t.image?.data?t.image.data.byteLength:(t.image?.width??0)*(t.image?.height??0)*4;}});return n;}
+ // Removes loaded tiles that are no longer needed, never one that is wanted or stands in for a wanted one:
+ // 1. coarse tiles whose wanted finer tiles are all ready (replaced);
+ // 2. tiles farther than dropDistanceMeters from the focus (you moved away);
+ // 3. above gpuBudgetMb, the farthest remaining ones, trimming to 90% so loads do not trim one by one.
  function prune(focus){
   for(const [a,rest]of waiting)if(!rest.size&&!want.has(a))drop(a);
-  // Over budget: trim to 90% so the next few loads do not trim again one tile at a time.
-  const limit=settings().keepTiles??8000;if(loaded.size<=limit||!focus)return;const keep=Math.floor(limit*.9);
+  if(!focus)return;const s=settings();
   const underCovered=p=>{for(let i=1;i<p.length;i++)if(covered.has(p.slice(0,i)))return true;return false;};
   const needed=p=>want.has(p)||waiting.has(p)||underCovered(p);
-  const center=new THREE.Vector3(),spare=[];
-  for(const [p,m]of loaded)if(!needed(p))spare.push([center.fromArray(m.userData.descriptor.center).distanceTo(focus),p]);
+  const center=new THREE.Vector3(),spare=[],far=s.dropDistanceMeters??3000;
+  for(const [p,m]of loaded){if(needed(p))continue;const d=center.fromArray(m.userData.descriptor.center).distanceTo(focus);if(d>far)drop(p);else spare.push([d,p]);}
+  const budget=(s.gpuBudgetMb??2048)*1048576;if(bytes<=budget)return;
   spare.sort((x,y)=>y[0]-x[0]);
-  for(const [,p]of spare){if(loaded.size<=keep)break;drop(p);}
+  for(const [,p]of spare){if(bytes<=budget*.9)break;drop(p);}
  }
 
  // Picks the most urgent pending tile for the current camera.
@@ -99,7 +105,7 @@ export function createTileStream(o){
    if(ctl.signal.aborted||g!==epoch||loaded.has(d.path))return;
    const m=await o.makeMesh(tile);
    if(ctl.signal.aborted||g!==epoch){o.disposeMesh(m);return;}
-   m.userData.descriptor=d;m.userData.credits=tile.credits;o.place(m,d);o.group.add(m);fade.durationMs=settings().fadeMs??300;fade.add(m,o.now());loaded.set(d.path,m);stats.done++;o.onTile?.({path:d.path});
+   m.userData.descriptor=d;m.userData.credits=tile.credits;m.userData.gpuBytes=gpuBytes(m);bytes+=m.userData.gpuBytes;o.place(m,d);o.group.add(m);fade.durationMs=settings().fadeMs??300;fade.add(m,o.now());loaded.set(d.path,m);stats.done++;o.onTile?.({path:d.path});
    // This tile now stands for its area: finer leftovers under it would overlap (z-fighting).
    for(const p of [...loaded.keys()])if(isAncestor(d.path,p)&&!want.has(p))drop(p);
    // A coarse tile above it can go once all of its wanted finer tiles are here.
@@ -148,6 +154,6 @@ export function createTileStream(o){
   tick(now){fade.update(now);},
   loaded,
   get group(){return o.group;},
-  stats:()=>({...stats,resident:loaded.size,downloading:inflight.size,queued:pending.length,fading:fade.active}),
+  stats:()=>({...stats,resident:loaded.size,gpuMB:Math.round(bytes/1048576),downloading:inflight.size,queued:pending.length,fading:fade.active}),
  };
 }
