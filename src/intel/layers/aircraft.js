@@ -17,7 +17,7 @@
 // - between refreshes each aircraft moves along its track at its ground speed (dead reckoning), so
 //   markers and the selection follow it smoothly.
 // What is drawn is then thinned by the overlay grid: zooming in shows more aircraft.
-import {defineLayer,fetchJson} from '../layer.js';
+import {defineLayer,fetchJson,getFeedProxy} from '../layer.js';
 import {TileError} from '../../core/errors.js';
 import {distance} from '../../core/geodesy.js';
 
@@ -61,7 +61,9 @@ export const aircraft=defineLayer({
   {key:'proxyUrl',label:'CORS proxy',type:'text',placeholder:'https://proxy/?url='}],
  hint:'ADS-B services block browsers (CORS): set a proxy you control, or open the viewer through serve.py.',
  async load({bounds,zoom,signal,options,emit}){
-  if(!options.proxyUrl)throw new TileError('cors_blocked','Aircraft need a CORS proxy: set "CORS proxy" in the layer options, or open the viewer through serve.py.');
+  // Own proxy option first, else the page proxy when it forwards this service.
+  const host=new URL(AIRCRAFT_SOURCES[options.source][1].replace(/\{\w+\}/g,'0')).hostname,page=getFeedProxy(),proxyUrl=options.proxyUrl||(page&&(!page.hosts||page.hosts.includes(host))?page.url:'');
+  if(!proxyUrl)throw new TileError('cors_blocked','Aircraft need a CORS proxy: set "CORS proxy" in the layer options, or open the viewer through serve.py.');
   // Per-viewer state: recent answers per circle, and the rate-limit pause.
   const st=this._state??={circles:new Map(),coolUntil:0,strikes:0},now0=Date.now(),fresh=this.refreshAt(zoom)*.9;
   // Circles snap to a fixed lattice, so a small pan asks for the same circles (reused from cache).
@@ -75,7 +77,7 @@ export const aircraft=defineLayer({
    if(Date.now()<st.coolUntil)continue;
    if(requested++)await new Promise((r,j)=>{const t=setTimeout(r,options.spacingMs);signal?.addEventListener('abort',()=>{clearTimeout(t);j(new DOMException('Aborted','AbortError'));},{once:true});});
    const upstream=tpl.replace('{lat}',c.lat.toFixed(4)).replace('{lon}',c.lon.toFixed(4)).replace('{nm}',c.nm);
-   try{const j=await fetchJson(options.proxyUrl+encodeURIComponent(upstream),{signal}),now=Date.now(),list=[];
+   try{const j=await fetchJson(proxyUrl+encodeURIComponent(upstream),{signal,route:false}),now=Date.now(),list=[];
     for(const a of j.ac??j.aircraft??[])if(Number.isFinite(a.lat)&&Number.isFinite(a.lon))list.push(parse(a,now));
     st.circles.set(key,{t:now,list});st.strikes=0;add(list);emit?.([...byId.values()]);
     while(st.circles.size>64)st.circles.delete(st.circles.keys().next().value);}

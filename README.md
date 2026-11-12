@@ -33,7 +33,11 @@ python serve.py                 # http://127.0.0.1:8080
 `serve.py` uses only the Python standard library. It serves `standalone.html` and `dist/` (nothing
 else from the folder), with CORS headers. It also adds a CORS proxy, `/proxy?url=…`, for feeds that
 block browsers, such as live aircraft. When the page is opened through it, the viewer detects the proxy
-and turns live aircraft on by itself.
+and sends its 2D tiles and data feeds through it (3D stays direct: Rocktree already sends CORS headers). That
+turns on live aircraft, and makes missing Google tiles readable: they are reported quietly (204 +
+`X-Upstream-Status: 404`) instead of filling the console with CORS errors. Only the hosts the proxy lists at `/proxy/health` are sent to it (everything else goes direct), so an older or
+narrower proxy cannot break requests it does not forward. Any page can do the same with `Tiles.discoverProxy(location.href)`, or
+`network: { proxyUrl: 'http://127.0.0.1:8080/proxy?url=' }` (or `Tiles2D.setProxy(url)`).
 
 The proxy is not open:
 
@@ -165,6 +169,12 @@ const img = await t2.getImage(
   { west: 12.490, north: 41.892, east: 12.494, south: 41.888 }, 18);
 document.body.append(img.canvas);                           // or await img.blob()
 ```
+
+Scale: `1`, `1.5`, `2`, `3` or `4` (256 to 1024 px tiles, the values Google accepts). The viewer
+defaults to `2`. A larger tile holds the same detail as the next zoom level in one image, so on screen
+it means fewer, heavier requests rather than sharper imagery. Google lacks some tiles above scale 1 (seen at z11-12, mostly over sea); those are
+rebuilt from the scale-1 tiles one level deeper (same detail), or from the scale-1 tile itself where nothing finer
+exists.
 
 Layers: `s` satellite, `y` hybrid, `h` labels, `m` roadmap, `p` terrain+, `t` relief,
 `r` roads, `traffic`, `transit`, `bike`. Styles go through `setStyle('s.t:3|p.v:off')`.

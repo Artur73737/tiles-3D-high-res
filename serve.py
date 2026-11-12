@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Local server for the Tiles viewer.
 
-Serves standalone.html (at /) and the built bundle, and exposes a small CORS proxy for data feeds that
-do not send CORS headers (live aircraft / ADS-B):
+Serves standalone.html (at /) and the built bundle, and exposes a small CORS proxy. The viewer opened
+through it sends its Google 2D tiles and data feeds there: live aircraft (ADS-B has no CORS at all),
+and Google answers a missing tile with a 404 without CORS headers, which only a proxy makes readable.
 
     GET /proxy?url=<encoded https URL>     forwarded to an allowed host, answered with CORS headers
     GET /proxy/health                      {"ok": true} -- the viewer uses it to enable the proxy
@@ -19,18 +20,30 @@ import argparse
 import json
 import mimetypes
 import sys
-import urllib.error
 import urllib.parse
-import urllib.request
+import http.client
+import threading
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 ALLOWED_HOSTS = {
+    # live aircraft
     "api.adsb.lol",
     "opendata.adsb.fi",
     "opensky-network.org",
+    # Google 2D tiles
+    "mt0.google.com",
+    "mt1.google.com",
+    "mt2.google.com",
+    "mt3.google.com",
+    # data feeds and elevation
+    "celestrak.org",
+    "earthquake.usgs.gov",
+    "eonet.gsfc.nasa.gov",
+    "api.open-meteo.com",
+    "api.rainviewer.com",
 }
 MAX_BYTES = 16 * 1024 * 1024
 TIMEOUT_S = 20
@@ -38,6 +51,37 @@ USER_AGENT = "tiles-viewer-proxy/1.0"
 
 mimetypes.add_type("application/javascript", ".js")
 mimetypes.add_type("application/geo+json", ".geojson")
+
+
+# One kept-alive HTTPS connection per upstream host and server thread (the browser reuses its connection
+# to this server, so one thread serves many tiles): no TLS handshake per tile.
+_pool = threading.local()
+
+
+def fetch_upstream(parts, headers):
+    """GET an https URL; returns (status, lower-case headers, body or None when over MAX_BYTES)."""
+    conns = _pool.__dict__.setdefault("conns", {})
+    path = parts.path or "/"
+    if parts.query:
+        path += "?" + parts.query
+    for attempt in (0, 1):
+        conn = conns.get(parts.netloc)
+        if conn is None:
+            conn = conns[parts.netloc] = http.client.HTTPSConnection(parts.hostname, parts.port or 443, timeout=TIMEOUT_S)
+        try:
+            conn.request("GET", path, headers={**headers, "Host": parts.netloc, "Connection": "keep-alive"})
+            response = conn.getresponse()
+            body = response.read(MAX_BYTES + 1)
+            if response.will_close:
+                conn.close()
+                conns.pop(parts.netloc, None)
+            return response.status, {k.lower(): v for k, v in response.getheaders()}, (body if len(body) <= MAX_BYTES else None)
+        except (OSError, http.client.HTTPException):
+            # A kept-alive connection the server closed meanwhile: retry once on a fresh one.
+            conn.close()
+            conns.pop(parts.netloc, None)
+            if attempt:
+                raise
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -51,8 +95,9 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Accept, Content-Type")
-        self.send_header("Access-Control-Expose-Headers", "Retry-After")
-        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Access-Control-Expose-Headers", "Retry-After, X-Upstream-Status")
+        if not getattr(self, "_cache_control_sent", False):
+            self.send_header("Cache-Control", "no-cache")
         super().end_headers()
 
     def do_OPTIONS(self):
@@ -115,24 +160,36 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json(HTTPStatus.BAD_REQUEST, {"error": "url must be an absolute https URL"})
         if parts.hostname not in self.allowed:
             return self.send_json(HTTPStatus.FORBIDDEN, {"error": f"host not allowed: {parts.hostname}", "allowed": sorted(self.allowed)})
-        request = urllib.request.Request(target, headers={"User-Agent": USER_AGENT, "Accept": self.headers.get("Accept", "*/*")})
         # 1. Upstream only: its failures become an error answer for the browser.
         try:
-            with urllib.request.urlopen(request, timeout=TIMEOUT_S) as upstream:
-                body = upstream.read(MAX_BYTES + 1)
-                status, ctype = upstream.status, upstream.headers.get("Content-Type", "application/octet-stream")
-        except urllib.error.HTTPError as e:
-            headers = {"Retry-After": e.headers["Retry-After"]} if e.headers.get("Retry-After") else {}
-            return self.send_json(e.code, {"error": f"upstream HTTP {e.code}"}, headers)
-        except (urllib.error.URLError, TimeoutError, OSError) as e:
-            return self.send_json(HTTPStatus.BAD_GATEWAY, {"error": f"upstream unreachable: {getattr(e, 'reason', e)}"})
-        if len(body) > MAX_BYTES:
+            status, headers, body = fetch_upstream(parts, {"User-Agent": USER_AGENT, "Accept": self.headers.get("Accept", "*/*")})
+        except (OSError, http.client.HTTPException) as e:
+            return self.send_json(HTTPStatus.BAD_GATEWAY, {"error": f"upstream unreachable: {e}"})
+        if body is None:
             return self.send_json(HTTPStatus.BAD_GATEWAY, {"error": "upstream response too large"})
+        if status == 404:
+            # "No such tile" is a normal answer for map tiles. Sent as 204 + X-Upstream-Status, so the
+            # browser console does not list every missing tile as a failed request; the viewer reads the header.
+            self.send_response(HTTPStatus.NO_CONTENT)
+            self.send_header("X-Upstream-Status", "404")
+            self.send_header("Cache-Control", "max-age=3600")
+            self._cache_control_sent = True
+            self.end_headers()
+            self._cache_control_sent = False
+            return
+        if status >= 400:
+            extra = {"Retry-After": headers["retry-after"]} if headers.get("retry-after") else {}
+            return self.send_json(status, {"error": f"upstream HTTP {status}"}, extra)
         # 2. Answer the browser. If it already gave up (request cancelled), handle() drops the connection.
+        #    Upstream caching rules pass through, so the viewer can keep tiles.
         self.send_response(status)
-        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Type", headers.get("content-type", "application/octet-stream"))
         self.send_header("Content-Length", str(len(body)))
+        if headers.get("cache-control"):
+            self.send_header("Cache-Control", headers["cache-control"])
+            self._cache_control_sent = True
         self.end_headers()
+        self._cache_control_sent = False
         self.wfile.write(body)
 
     def log_message(self, fmt, *args):

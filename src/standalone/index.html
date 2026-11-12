@@ -6,7 +6,9 @@
 // UI mode: one call. API-only mode: use Tiles.Tiles2D / Tiles.Tiles3D directly (same bundle).
 const q=new URLSearchParams(location.search),n=k=>q.has(k)?Number(q.get(k)):undefined;
 window.viewer=Tiles.createViewer('#viewer',{view:q.get('view')||'flat',mode:q.get('mode')||'2d',latitude:n('lat'),longitude:n('lon'),zoom:n('zoom'),panel:q.get('panel')!=='0'});
-// Served by serve.py: its CORS proxy makes live aircraft work. Elsewhere (file://, GitHub Pages) nothing changes.
-if(location.protocol.startsWith('http'))fetch(new URL('proxy/health',location.href)).then(r=>r.ok?r.json():null).then(j=>{if(j?.ok)viewer.intel.set('aircraft',{proxyUrl:new URL('proxy?url=',location.href).href});}).catch(()=>{});
+// Served by serve.py: 2D tiles and data feeds go through its CORS proxy (live aircraft included; missing
+// Google tiles then answer a readable 404). Elsewhere (file://, GitHub Pages) nothing changes.
+// Only the hosts the proxy lists are sent to it, so an older serve.py cannot break tiles it does not forward.
+if(location.protocol.startsWith('http'))Tiles.discoverProxy(location.href).then(p=>{if(p)viewer.set({network:{proxyUrl:p.url,proxyHosts:p.hosts}});});
 </script>
 </body></html>

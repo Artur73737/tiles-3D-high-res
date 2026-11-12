@@ -8,6 +8,7 @@ import {HTML} from './template.js';
 import {createControls} from './controls.js';
 import {createMapView} from './scene/mapview.js';
 import {createIntel} from '../intel/index.js';
+import {setFeedProxy} from '../intel/layer.js';
 import {createIntelPanel} from '../intel/panel.js';
 import {createPopup} from '../intel/popup.js';
 import {createTools} from '../tools/index.js';
@@ -24,9 +25,9 @@ const LAYER_LABEL={s:'satellite',y:'hybrid',h:'labels',m:'roadmap',p:'terrain+',
 const STYLE_PRESETS={'':'None','s.e:l|p.v:off':'No labels','p.s:-100':'Grayscale','p.s:-100|p.l:-60':'Dark gray','s.t:3|p.v:off':'No roads','p.v:simplified':'Simplified','custom':'Custom'};
 const REFERRER=['','no-referrer','no-referrer-when-downgrade','origin','origin-when-cross-origin','same-origin','strict-origin','strict-origin-when-cross-origin','unsafe-url'];
 export const VIEWER_DEFAULTS={
- d2:{layers:['s'],scale:1,language:'en',region:'',stylePreset:'',style:'',servers:[0,1,2,3],minZoom:0,maxZoom:22,overzoom:false,query:''},
+ d2:{layers:['s'],scale:2,language:'en',region:'',stylePreset:'',style:'',servers:[0,1,2,3],minZoom:0,maxZoom:22,overzoom:false,query:''},
  d3:{radiusMeters:MAX_RADIUS_M,fullDetailMeters:150,nearRadiusMeters:60,headingDegrees:null,fieldOfViewDegrees:360,viewPriority:true,fadeMs:300,detail:'max',maxDepth:18,targetMetersPerTexel:0.1,textureRequest:'dxt1',layers:['terrain','overlay','water'],normals:false,order:'distance',maxTiles:20000,metadataCacheSize:200,baseUrl:'',dropDistanceMeters:3000,gpuBudgetMb:null,flySpeed:30},
- network:{concurrency:12,timeoutMs:30000,retries:2,retryDelayMs:250,headers:'',credentials:'omit',referrerPolicy:'',maxResponseMb:64},
+ network:{concurrency:12,timeoutMs:30000,retries:2,retryDelayMs:250,headers:'',credentials:'omit',referrerPolicy:'',maxResponseMb:64,proxyUrl:'',proxyHosts:null},
  cache:{mode:'persistent',memoryMb:128,diskMb:1024,ttlSeconds:null},
  enhance:{sharpen2d:true,sharpness2d:0.6,denoise2d:0,upscale2d:2,enabled2d:false,sharpen3d:true,sharpness3d:0.5,enabled3d:false},
 };
@@ -34,7 +35,7 @@ export const VIEWER_DEFAULTS={
 const SCHEMA=[
  {title:'2D layers',cls:'m2',group:'d2',side:'left',fields:[
   {key:'layers',label:'Layers',type:'checks',wide:true,resolve:resolveLayers,options:Object.keys(GOOGLE_LAYERS).map(k=>[k,LAYER_LABEL[k]===k?k:k+' · '+LAYER_LABEL[k]])},
-  {key:'scale',label:'Scale',type:'select',options:[[1,'1x  256 px'],[2,'2x  512 px'],[4,'4x  1024 px']]},
+  {key:'scale',label:'Scale',type:'select',options:[[1,'1x  256 px'],[1.5,'1.5x  384 px'],[2,'2x  512 px'],[3,'3x  768 px'],[4,'4x  1024 px']]},
   {key:'language',label:'Language',type:'text',placeholder:'hl  en, it, ja, zh-CN'},
   {key:'region',label:'Region',type:'text',placeholder:'gl  us, ru, in'},
   {key:'stylePreset',label:'Style',type:'select',options:Object.entries(STYLE_PRESETS)},
@@ -88,6 +89,7 @@ const SCHEMA=[
   {key:'maxResponseMb',label:'Max resp. MiB',type:'number',min:1,step:8},
   {key:'credentials',label:'Credentials',type:'select',options:[['omit','omit'],['same-origin','same-origin']]},
   {key:'referrerPolicy',label:'Referrer',type:'select',options:REFERRER.map(r=>[r,r||'default'])},
+  {key:'proxyUrl',label:'CORS proxy',type:'text',placeholder:'http://127.0.0.1:8080/proxy?url='},
   {key:'headers',label:'Headers',type:'text',placeholder:'{"Accept-Language":"it"}'},
  ]},
  {title:'Cache',group:'cache',side:'right',fields:[
@@ -103,7 +105,7 @@ const json=(text,name)=>{if(!text||!String(text).trim())return null;if(typeof te
 
 export function createViewer(target,options={}){
  const host=typeof target==='string'?document.querySelector(target):target;if(!host)throw new Error('createViewer: target not found');
- const iframe=document.createElement('iframe');iframe.title='Tiles viewer';iframe.setAttribute('allow','fullscreen; pointer-lock');
+ const iframe=document.createElement('iframe');iframe.title='Tiles viewer';iframe.setAttribute('allow','fullscreen'); // pointer lock needs no policy for this same-origin frame
  iframe.style.cssText='border:0;display:block;width:'+(options.width??'100%')+';height:'+(options.height??'100%');host.append(iframe);
  const doc=iframe.contentDocument,win=iframe.contentWindow;doc.open();doc.write(HTML);doc.close();
  const $=id=>doc.getElementById(id),app=$('app'),listeners=new Map(),emit=(type,detail)=>{for(const fn of listeners.get(type)??[])try{fn(detail);}catch(e){console.error(e);}};
@@ -145,8 +147,11 @@ export function createViewer(target,options={}){
 
  // ---------- API clients from cfg ----------
  function network(){const n=cfg.network,c=cfg.cache;return {concurrency:n.concurrency,timeoutMs:n.timeoutMs,retries:[n.retries,n.retryDelayMs],headers:json(n.headers,'Headers')??{},credentials:n.credentials,referrerPolicy:n.referrerPolicy||undefined,maxResponseBytes:n.maxResponseMb*1048576,cache:{mode:c.mode,memoryBytes:c.memoryMb*1048576,diskBytes:c.diskMb*1048576,ttlSeconds:c.ttlSeconds}};}
- function build2d(){const d=cfg.d2;if(!d.layers.length)throw new Error('Select at least one layer');if(!d.servers.length)throw new Error('Select at least one server');
-  const c=new Tiles2D(network());c.set({layers:d.layers,scale:d.scale,language:d.language||'en',region:d.region||null,style:(d.stylePreset==='custom'?d.style:d.stylePreset)||null,servers:d.servers,zoomRange:[d.minZoom,d.maxZoom],overzoom:d.overzoom});
+ // CORS proxy (network.proxyUrl, proxyHosts): 2D tiles and data feeds, for the hosts the proxy forwards.
+ // 3D stays direct (Rocktree sends CORS headers).
+ const proxyConfig=()=>cfg.network.proxyUrl?{url:cfg.network.proxyUrl,hosts:cfg.network.proxyHosts??null}:null;
+ function build2d(){const d=cfg.d2;setFeedProxy(proxyConfig());if(!d.layers.length)throw new Error('Select at least one layer');if(!d.servers.length)throw new Error('Select at least one server');
+  const c=new Tiles2D({...network(),proxyUrl:cfg.network.proxyUrl||null,proxyHosts:cfg.network.proxyHosts??null});c.set({layers:d.layers,scale:d.scale,language:d.language||'en',region:d.region||null,style:(d.stylePreset==='custom'?d.style:d.stylePreset)||null,servers:d.servers,zoomRange:[d.minZoom,d.maxZoom],overzoom:d.overzoom});
   const q=json(d.query,'Extra query');if(q)c.setQuery(q,{merge:false});return c;}
  function build3d(){const d=cfg.d3;if(!d.layers.length)throw new Error('Select at least one surface');
   const c=new Tiles3D({...network(),radiusMeters:d.radiusMeters,nearRadiusMeters:d.nearRadiusMeters,maxTiles:d.maxTiles,order:d.order,layers:{terrain:d.layers.includes('terrain'),overlay:d.layers.includes('overlay'),water:d.layers.includes('water')},textureRequest:d.textureRequest,normals:d.normals,metadataCacheSize:d.metadataCacheSize,coordinates:'local',textureOutput:'native'});

@@ -1,4 +1,5 @@
 import {ByteTransport} from '../core/net/transport.js';
+import {fetchVia} from '../core/net/proxy.js';
 import {MemoryByteCache,IndexedDbByteCache} from '../core/net/cache.js';
 import {TileError} from '../core/errors.js';
 export const MiB=1024*1024;
@@ -43,6 +44,11 @@ export class TileClient {
  setHeaders(headers,{merge=false}={}){if(!headers||typeof headers!=='object')fail('headers must be an object');if(typeof document!=='undefined'&&this.network.fetch==null)for(const k of Object.keys(headers))if(!SAFE_HEADERS.includes(k.toLowerCase()))throw new TileError('cors_rejected','Google rejects the CORS preflight caused by header '+k+'; browsers may send only '+SAFE_HEADERS.join(', '),{header:k});for(const [k,v]of Object.entries(headers))if(typeof v!=='string')fail('header values must be strings',{header:k});this.network.headers=merge?{...this.network.headers,...headers}:{...headers};if(this._transport)this._transport.headers=this.network.headers;return this;}
  setMaxResponseBytes(bytes){this.network.maxResponseBytes=positive(bytes,'maxResponseBytes');if(this._transport)this._transport.maxResponseBytes=bytes;return this;}
  setCredentials(mode){if(!CREDENTIALS.includes(mode))fail('credentials must be one of '+CREDENTIALS.join(', '),{credentials:mode});this.network.credentials=mode;if(this._transport)this._transport.credentials=mode;return this;}
+ // Route every request through a CORS proxy (serve.py: 'http://host:port/proxy?url='); null = direct.
+ // Cache keys stay the upstream URLs.
+ // hosts: only these hostnames go through the proxy (serve.py lists them at /proxy/health); null: all.
+ setProxy(proxyUrl,hosts=this.network.proxyHosts??null){if(proxyUrl!=null&&(typeof proxyUrl!=='string'||!/^https?:\/\//.test(proxyUrl)))fail('proxyUrl must be an http(s) URL or null');if(hosts!=null&&!(Array.isArray(hosts)&&hosts.every(h=>typeof h==='string')))fail('proxy hosts must be an array of hostnames or null');this.network.proxyUrl=proxyUrl||null;this.network.proxyHosts=hosts;return this;}
+ setProxyHosts(hosts){return this.setProxy(this.network.proxyUrl??null,hosts);}
  setReferrerPolicy(policy){if(policy!==undefined&&typeof policy!=='string')fail('referrerPolicy must be a string');this.network.referrerPolicy=policy;if(this._transport)this._transport.referrerPolicy=policy;return this;}
  setFetch(fetcher){if(fetcher!=null&&typeof fetcher!=='function')fail('fetch must be a function or null');this.network.fetch=fetcher??null;this.retire();return this;}
  setCache(options){
@@ -64,7 +70,7 @@ export class TileClient {
    this._cache=c.mode==='persistent'&&typeof indexedDB!=='undefined'?new TwoTierCache(memory,new IndexedDbByteCache({name:c.name,maxBytes:c.diskBytes})):memory;
    if(c.mode==='persistent'&&typeof indexedDB==='undefined'&&this._cache){this._cache.warning='IndexedDB unavailable: memory cache only';}
    const n=this.network;
-   this._transport=new ByteTransport({cache:this._cache,fetch:n.fetch??((url,init)=>globalThis.fetch(url,init)),concurrency:n.concurrency,maxResponseBytes:n.maxResponseBytes,headers:n.headers,timeoutMs:n.timeoutMs,retries:n.retries,retryDelayMs:n.retryDelayMs,credentials:n.credentials,referrerPolicy:n.referrerPolicy,ttlMs:c.ttlSeconds==null?null:c.ttlSeconds*1000});
+   this._transport=new ByteTransport({cache:this._cache,fetch:(url,init)=>fetchVia(n.fetch??globalThis.fetch,url,init,n.proxyUrl?{url:n.proxyUrl,hosts:n.proxyHosts??null}:null),concurrency:n.concurrency,maxResponseBytes:n.maxResponseBytes,headers:n.headers,timeoutMs:n.timeoutMs,retries:n.retries,retryDelayMs:n.retryDelayMs,credentials:n.credentials,referrerPolicy:n.referrerPolicy,ttlMs:c.ttlSeconds==null?null:c.ttlSeconds*1000});
    this.onTransport?.(this._transport);
   }
   return this._transport;
@@ -76,4 +82,4 @@ export class TileClient {
  }
  async dispose(){if(this.disposed)return;const t=this._transport,c=this._cache;this._transport=null;this.disposed=true;if(t)await t.dispose();await c?.close();await Promise.allSettled(this._retired);}
 }
-TileClient.optionSetters={concurrency:{name:'setConcurrency'},timeoutMs:{name:'setTimeout'},retries:{name:'setRetries',spread:true},headers:{name:'setHeaders'},maxResponseBytes:{name:'setMaxResponseBytes'},credentials:{name:'setCredentials'},referrerPolicy:{name:'setReferrerPolicy'},fetch:{name:'setFetch'},cache:{name:'setCache'}};
+TileClient.optionSetters={concurrency:{name:'setConcurrency'},proxyUrl:{name:'setProxy'},proxyHosts:{name:'setProxyHosts'},timeoutMs:{name:'setTimeout'},retries:{name:'setRetries',spread:true},headers:{name:'setHeaders'},maxResponseBytes:{name:'setMaxResponseBytes'},credentials:{name:'setCredentials'},referrerPolicy:{name:'setReferrerPolicy'},fetch:{name:'setFetch'},cache:{name:'setCache'}};

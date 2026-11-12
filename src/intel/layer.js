@@ -24,13 +24,23 @@
 import {TileError} from '../core/errors.js';
 
 // JSON GET with a time limit, so a service that never answers shows an error instead of loading forever.
-export async function fetchJson(url,{signal,timeoutMs=20000,fetch:fetcher=globalThis.fetch}={}){
+// Page-wide CORS proxy for data feeds (set by the viewer when one is configured, e.g. serve.py).
+import {fetchVia} from '../core/net/proxy.js';
+let feedProxy=null;
+// proxy: {url, hosts} (hosts null = every host) or null.
+export function setFeedProxy(proxy){feedProxy=proxy?.url?proxy:null;}
+export const getFeedProxy=()=>feedProxy;
+
+// route:false for callers that already address a proxy themselves.
+export async function fetchJson(url,{signal,timeoutMs=20000,route=true,fetch:fetcher=globalThis.fetch}={}){
  const ctl=new AbortController(),stop=()=>ctl.abort();signal?.addEventListener('abort',stop,{once:true});
  let timedOut=false;const timer=setTimeout(()=>{timedOut=true;ctl.abort();},timeoutMs);
  try{
   let res;
-  try{res=await fetcher(url,{signal:ctl.signal,headers:{Accept:'application/json'}});}
+  try{res=await fetchVia(fetcher,url,{signal:ctl.signal,headers:{Accept:'application/json'}},route?feedProxy:null);}
   catch(e){if(timedOut)throw new TileError('timeout','No answer within '+timeoutMs/1000+' s: '+url,{url});if(e?.name==='AbortError')throw e;throw new TileError('network_error','Request failed (network or CORS): '+url,{url});}
+  const upstream=res.status===204?Number(res.headers?.get?.('x-upstream-status'))||0:0;
+  if(upstream)throw new TileError('http_error','HTTP '+upstream+' for '+url,{url,status:upstream});
   if(!res.ok)throw new TileError('http_error','HTTP '+res.status+' for '+url,{url,status:res.status,retryAfterS:Number(res.headers?.get?.('retry-after'))||null});
   try{return await res.json();}catch(e){if(timedOut)throw new TileError('timeout','No answer within '+timeoutMs/1000+' s: '+url,{url});throw e;}
  }finally{clearTimeout(timer);signal?.removeEventListener('abort',stop);}

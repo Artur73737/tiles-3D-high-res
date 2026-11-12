@@ -48,6 +48,9 @@ export class ByteTransport {
    let response;
    try{response=await this.fetch(url,{signal:local.signal,mode:'cors',credentials:this.credentials,cache:'no-cache',headers:{...this.headers},...(this.referrerPolicy?{referrerPolicy:this.referrerPolicy}:{})});}
    catch(error){if(timedOut)throw new TileError('timeout','Tile request timed out',{url,timeoutMs:this.timeoutMs});if(isAbort(error))throw error;throw new TileError('network_error','Tile request failed: '+(error?.message??error),{url});}
+   // A proxy (serve.py) reports an upstream 404 as 204 + X-Upstream-Status, which browsers do not log.
+   const upstream=response.status===204?Number(response.headers.get('x-upstream-status'))||0:0;
+   if(upstream)throw new TileError('http_error','Tile request failed: '+upstream,{url,status:upstream});
    if(!response.ok)throw new TileError('http_error','Tile request failed: '+response.status,{url,status:response.status});
    const declared=Number(response.headers.get('content-length'));if(declared>this.maxResponseBytes)throw new TileError('resource_limit','Response exceeds byte budget',{url,declared});
    const reader=response.body?.getReader();let bytes;
