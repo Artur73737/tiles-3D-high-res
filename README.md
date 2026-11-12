@@ -66,8 +66,8 @@ Loaded 3D tiles stay when the camera moves or turns. A tile is removed only in t
 
 - It is replaced by tiles covering the same ground. Detail never goes down, and a coarse tile stays
   until all of its finer tiles are ready.
-- It is farther than  from you (3000 by default).
-- The loaded tiles use more than  of GPU memory, measured on the actual buffers and
+- It is farther than `dropDistanceMeters` from you (3000 by default).
+- The loaded tiles use more than `gpuBudgetMb` of GPU memory, measured on the actual buffers and
   textures. The farthest tiles go first. Browsers do not report VRAM, so the default is conservative:
   2048 MB on desktop, 512 MB on tablet, 256 MB on phone. Raise it to match your GPU (for example 8192
   on a 12 GB card).
