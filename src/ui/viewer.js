@@ -363,7 +363,7 @@ export function createViewer(target,options={}){
  const map=createMapView({state,stage:stageEl,camera,globe,world,orbit,origin:()=>origin,enu,project,unproject,groundAlt:()=>globe.ground()});
  let panel=null,popup=null;const changed=()=>{panel?.schedule();popup?.render(intel.selected);app.classList.toggle('tool-on',!!tools.active);};
  const tools=createTools({map,onChange:()=>{intel?.redraw();changed();}});
- const intel=createIntel({doc,win,stage:stageEl,map,tools,options:options.intel??{},onChange:changed,onError:(l,e)=>emit('error',e),onZoomTo:(lat,lon,zoom)=>safe(()=>goTo({latitude:lat,longitude:lon,zoom}))});
+ const intel=createIntel({doc,win,stage:stageEl,map,tools,options:options.intel??{},onChange:changed,onError:(l,e)=>emit('error',e)});
  const download=(name,text,type)=>{const url=URL.createObjectURL(new win.Blob([text],{type})),a=doc.createElement('a');a.href=url;a.download=name;doc.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),5000);};
  panel=createIntelPanel({doc,ui,intel,tools,download,notify:(t,c)=>status(t,c==='err'?'err':''),onFocus:(lat,lon)=>safe(()=>goTo({latitude:lat,longitude:lon}))});panel.mount($('left'));
  popup=createPopup({doc,stage:stageEl,onClose:()=>intel.select(null)});

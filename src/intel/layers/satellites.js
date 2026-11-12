@@ -21,7 +21,7 @@ export function position(satrec,date){
 }
 
 export const satellites=defineLayer({
- id:'satellites',label:'Satellites',group:'Space',source:'CelesTrak',scope:'global',refreshMs:6*3600e3,display:{dense:'dots',clusterAbove:600,labelZoom:6},
+ id:'satellites',label:'Satellites',group:'Space',source:'CelesTrak',scope:'global',refreshMs:6*3600e3,display:{dense:'dots',dotsAbove:600,labelZoom:6},
  options:{group:'stations',budgetMs:3},
  schema:[{key:'group',label:'Group',type:'select',options:Object.entries(SAT_GROUPS)}],
  async load({signal,options}){

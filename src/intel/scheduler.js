@@ -27,7 +27,9 @@ export function createScheduler({viewport,now=()=>performance.now(),settleMs=450
  async function run(s,view,snap){
   s.ctl?.abort();const ctl=s.ctl=new AbortController();set(s,'loading');
   try{
-   const features=await s.layer.load({bounds:snap?.bounds??view,zoom:view.zoom,center:view.center,signal:ctl.signal,options:s.layer.options});
+   // emit(): layers that load in several requests publish what they have so far (shown immediately).
+   const emit=partial=>{if(ctl.signal.aborted)return;s.features=partial;onData?.(s.layer,partial);};
+   const features=await s.layer.load({bounds:snap?.bounds??view,zoom:view.zoom,center:view.center,signal:ctl.signal,options:s.layer.options,emit});
    if(ctl.signal.aborted)return;s.features=features;s.key=snap?.key??'global';s.loadedAt=now();set(s,'ready');onData?.(s.layer,features);
   // A failed load retries after 30 s (or the refresh interval if shorter), not after a full interval.
   }catch(e){if(e?.name==='AbortError'||ctl.signal.aborted)return;s.loadedAt=now()-s.layer.refreshMs+Math.min(30000,s.layer.refreshMs);set(s,'error',e);onError?.(s.layer,e);}
@@ -43,7 +45,8 @@ export function createScheduler({viewport,now=()=>performance.now(),settleMs=450
   for(const layer of layers){
    const s=slot(layer);if(s.ctl)continue;
    if(view.zoom<layer.minZoom){if(s.status!=='zoom')set(s,'zoom');continue;}
-   const due=t-s.loadedAt>=layer.refreshMs;
+   // refreshAt(zoom): wide views of busy layers refresh less often than close ones.
+   const due=t-s.loadedAt>=(layer.refreshAt?.(view.zoom)??layer.refreshMs);
    if(layer.scope==='global'){if(due&&(still||s.loadedAt===-Infinity))run(s,view,null);continue;}
    if(!still)continue;
    const snap=snapBounds(view,view.zoom,layer.grid);

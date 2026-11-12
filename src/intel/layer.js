@@ -15,7 +15,8 @@
 //   tick?(now, features)        per-frame update (satellites propagate their orbits here)
 //   style(feature) -> {shape, color, size, rotate?}
 //   dotColor?(feature) -> colour   fast path for dense layers drawn as dots (no object per point)
-//   display?                    overlay overrides: {dense:'dots'|'bubbles', clusterAbove, labelZoom, ...}
+//   rank?(feature) -> number    wins its grid cell when thinning (default: stable hash of the id)
+//   display?                    overlay overrides: {cell, dense:'dots', dotsAbove, labelZoom, ...}
 //   title(feature) -> string    short text shown next to the icon when zoomed in enough
 //   details(feature) -> [[key, value], ...] shown in the info popup
 //

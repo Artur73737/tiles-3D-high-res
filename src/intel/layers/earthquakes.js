@@ -19,6 +19,8 @@ export const earthquakes=defineLayer({
   return (j.features??[]).filter(f=>f.geometry?.coordinates?.length>=2).map(f=>{const [lon,lat,depth]=f.geometry.coordinates,p=f.properties??{};
    return {id:f.id,lat,lon,alt:0,mag:p.mag??null,depthKm:depth??null,place:p.place??'',time:p.time,url:p.url,tsunami:!!p.tsunami,alert:p.alert??null};});
  },
+ // Thinning keeps the strongest quake of each cell.
+ rank:f=>(f.mag??0)/10,
  style:f=>({shape:'ring',color:ageColor(f.time),size:4+Math.max(0,(f.mag??1))*2.6}),
  title:f=>(f.mag!=null?'M'+f.mag.toFixed(1)+' ':'')+f.place,
  details:f=>[['Magnitude',f.mag?.toFixed(1)??'—'],['Depth',f.depthKm!=null?f.depthKm.toFixed(1)+' km':'—'],['Place',f.place],['Time',new Date(f.time).toISOString().replace('T',' ').slice(0,19)+' UTC'],['Tsunami',f.tsunami?'yes':'no'],['Alert',f.alert??'—'],['Source',{href:f.url,text:'USGS event page'}]],

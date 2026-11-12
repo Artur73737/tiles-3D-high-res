@@ -11,13 +11,15 @@ import {createRadar} from './layers/radar.js';
 export function makeLayers(){return [earthquakes,events,satellites,aircraft,createRadar()].map(l=>({...l,options:structuredClone(l.options)}));}
 export const LAYER_IDS=['earthquakes','events','satellites','aircraft','radar'];
 
-export function createIntel({doc,win,stage,map,tools,options={},onChange,onError,onZoomTo}){
+export function createIntel({doc,win,stage,map,tools,options={},onChange,onError}){
  const layers=makeLayers(),byId=new Map(layers.map(l=>[l.id,l])),enabled=new Set();
  for(const [id,o]of Object.entries(options)){const l=byId.get(id);if(!l)throw new Error('Unknown intel layer '+id);const {enabled:on,...rest}=o;Object.assign(l.options,rest);if(on)enabled.add(id);}
  // needsDraw: data, tools or selection changed (redraw now). liveDirty: only live objects moved (satellites),
  // redrawn at most LIVE_MS apart while the view is still. lastSig: view signature of the last drawn frame.
  const LIVE_MS=250;let selected=null,lastTick=0,needsDraw=true,liveDirty=false,lastLive=0,lastSig='',blank=true;
- const scheduler=createScheduler({viewport:()=>map.viewport(),onData:()=>{needsDraw=true;onChange?.();},onState:()=>onChange?.(),onError:(l,e)=>onError?.(l,e)});
+ // New data replaces feature objects: the selection follows its object by id (a reloaded aircraft).
+ const follow=(layer,features)=>{if(selected?.layer!==layer)return;const f=features.find(x=>x.id===selected.feature.id);if(f)selected={layer,feature:f};};
+ const scheduler=createScheduler({viewport:()=>map.viewport(),onData:(l,fs)=>{follow(l,fs);needsDraw=true;onChange?.();},onState:()=>onChange?.(),onError:(l,e)=>onError?.(l,e)});
  const overlay=createOverlay({stage,map,doc,win});
  const active=()=>layers.filter(l=>enabled.has(l.id));
 
@@ -44,16 +46,15 @@ export function createIntel({doc,win,stage,map,tools,options={},onChange,onError
   enable(id,on=true){if(!byId.has(id))throw new Error('Unknown intel layer '+id);if(on)enabled.add(id);else{enabled.delete(id);scheduler.reset(id);if(selected?.layer.id===id)selected=null;}needsDraw=true;onChange?.();},
   setOptions(id,patch){const l=byId.get(id);if(!l)throw new Error('Unknown intel layer '+id);Object.assign(l.options,patch);scheduler.reset(id);needsDraw=true;onChange?.();},
   state:id=>scheduler.state(id),
-  // Last frame, per layer: {visible, icons, clusters, labels}.
+  // Last frame, per layer: {visible, icons, thinned, labels, dots}.
   get drawStats(){return overlay.stats;},
   features:id=>scheduler.features(id),
   get selected(){return selected;},
   select(sel){selected=sel;needsDraw=true;onChange?.();},
-  // Click on the map: a feature becomes selected; a cluster zooms in on its position.
+  // Click on the map: the object under the pointer becomes selected (nothing there: deselect).
   click(x,y){
    const h=overlay.hit(x,y);
    if(!h){if(selected){selected=null;needsDraw=true;onChange?.();}return null;}
-   if(h.cluster){const g=map.pick(x,y,{surface:false});if(g)onZoomTo?.(g.lat,g.lon,Math.min(18,map.zoom()+2));return h;}
    selected={layer:h.layer,feature:h.feature};needsDraw=true;onChange?.();return h;
   },
   dispose(){scheduler.dispose();overlay.dispose();},
