@@ -103,6 +103,8 @@ export class Tiles3D extends TileClient {
   tiles.sort(o.order==='path'?(a,b)=>a.path<b.path?-1:a.path>b.path?1:0:(a,b)=>a.distanceMeters-b.distanceMeters);
   return {epoch:planet.epoch,planetRadius:planet.radius,region:{latitude:o.latitude,longitude:o.longitude,radiusMeters:o.radiusMeters,headingDegrees:o.headingDegrees,fieldOfViewDegrees:o.fieldOfViewDegrees,nearRadiusMeters:o.nearRadiusMeters},selection:{maxDepth:o.maxDepth,targetMetersPerTexel:o.targetMetersPerTexel,fullDetailRadiusMeters:o.fullDetailRadiusMeters,pixelAngleRadians:o.pixelAngleRadians},declaredEmptyLeaves:empty,count:tiles.length,tiles};
  }
+ // Child tiles of a descriptor (metadata only, no payload). Empty for leaves.
+ async children(tile){if(!tile?.node)fail('children expects a descriptor from listTiles()');if(tile.node.leaf)return [];const planet=await this.getPlanet();return (await this.src().children(tile.node)).map(n=>this.describe(n,{focus:n.center},planet));}
  async resolvePath(path){
   if(typeof path!=='string'||!/^[0-7]+$/.test(path))fail('Tile path must be a non-empty octant string [0-7]+',{path});
   const source=this.src(),planet=await this.getPlanet();let node={root:true,epoch:planet.epoch};

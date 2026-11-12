@@ -19,7 +19,7 @@ const STYLE_PRESETS={'':'None','s.e:l|p.v:off':'No labels','p.s:-100':'Grayscale
 const REFERRER=['','no-referrer','no-referrer-when-downgrade','origin','origin-when-cross-origin','same-origin','strict-origin','strict-origin-when-cross-origin','unsafe-url'];
 export const VIEWER_DEFAULTS={
  d2:{layers:['s'],scale:1,language:'en',region:'',stylePreset:'',style:'',servers:[0,1,2,3],minZoom:0,maxZoom:22,overzoom:false,query:''},
- d3:{radiusMeters:MAX_RADIUS_M,fullDetailMeters:150,nearRadiusMeters:60,headingDegrees:null,fieldOfViewDegrees:360,viewPriority:true,fadeMs:300,detail:'max',maxDepth:18,targetMetersPerTexel:0.1,textureRequest:'dxt1',layers:['terrain','overlay','water'],normals:false,order:'distance',maxTiles:20000,metadataCacheSize:200,baseUrl:'',retainFactor:1.6,flySpeed:30},
+ d3:{radiusMeters:MAX_RADIUS_M,fullDetailMeters:150,nearRadiusMeters:60,headingDegrees:null,fieldOfViewDegrees:360,viewPriority:true,fadeMs:300,detail:'max',maxDepth:18,targetMetersPerTexel:0.1,textureRequest:'dxt1',layers:['terrain','overlay','water'],normals:false,order:'distance',maxTiles:20000,metadataCacheSize:200,baseUrl:'',keepTiles:null,flySpeed:30},
  network:{concurrency:12,timeoutMs:30000,retries:2,retryDelayMs:250,headers:'',credentials:'omit',referrerPolicy:'',maxResponseMb:64},
  cache:{mode:'persistent',memoryMb:128,diskMb:1024,ttlSeconds:null},
  enhance:{sharpen2d:true,sharpness2d:0.6,denoise2d:0,upscale2d:2,enabled2d:false,sharpen3d:true,sharpness3d:0.5,enabled3d:false},
@@ -61,7 +61,7 @@ const SCHEMA=[
   {key:'order',label:'Order',type:'select',options:[['distance','Distance'],['path','Octree path']]},
   {key:'maxTiles',label:'Max tiles',type:'number',min:1,step:1000},
   {key:'metadataCacheSize',label:'Metadata cache',type:'number',min:1,step:50},
-  {key:'retainFactor',label:'Retain x radius',type:'number',min:1,max:10,step:0.1},
+  {key:'keepTiles',label:'Keep tiles',type:'number',min:100,step:500,optional:true,placeholder:'auto'},
   {key:'baseUrl',label:'Endpoint',type:'text',placeholder:'https://kh.google.com/rt/earth/'},
  ]},
  {title:'Enhance',group:'enhance',id:'enhance',side:'left',fields:[
@@ -240,7 +240,8 @@ export function createViewer(target,options={}){
  let client3d=null,origin=null;
  const disposeMesh=g=>g.traverse(o=>{if(o.isMesh){o.geometry.dispose();o.material.map?.dispose();o.material.dispose();}});
  const textureOutput=()=>!dxt&&cfg.d3.textureRequest==='dxt1'?'rgba':'native';
- const settings3d=()=>({...cfg.d3,concurrency:cfg.network.concurrency});
+ // keepTiles null = by device: GPU memory is much smaller on phones and tablets.
+ const settings3d=()=>({...cfg.d3,concurrency:cfg.network.concurrency,keepTiles:cfg.d3.keepTiles??(device==='mobile'?2500:device==='tablet'?4000:8000)});
  // Angle of one device pixel: beyond fullDetailMeters a tile's texel must not exceed it.
  const pixelAngle=()=>camera.fov*Math.PI/180/Math.max(1,view.clientHeight*dpr());
  // Flat 3D: tiles in local ENU metres around origin; priority uses the camera converted to ECEF.
