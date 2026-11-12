@@ -139,7 +139,7 @@ export function createGlobe(ctx){
    if(m==='3d'&&nav.dist>2500){nav.dist=Math.min(nav.dist,cfg.d3.radiusMeters*3);nav.tilt=Math.max(nav.tilt,45);}
    if(m==='2d')clear3d();dirty=true;lastLod=0;},
   leave(){active=false;clear3d();if(view.ownerDocument.pointerLockElement===view)view.ownerDocument.exitPointerLock();},
-  setGround(g){ground=g;dirty=true;},
+  setGround(g){ground=g;dirty=true;},ground:()=>ground,
   update,invalidate2d(){gen2d++;for(const t of [...nodes.values()])dropNode(t);dirty=true;},
   invalidate3d(){clear3d();dirty=true;},refresh3d,
   getView(){const f=focus(),d=mode==='fly'?Math.max(1,altitude()):nav.dist;return {lat:f.lat,lon:f.lon,zoom:Math.max(0,Math.min(26,zoomFromDist(d,f.lat))),altitude:altitude(),heading:heading(),tilt:nav.tilt};},

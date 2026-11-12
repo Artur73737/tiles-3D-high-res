@@ -10,11 +10,16 @@
     "test:tiles": "node --test test/tiles-api.test.mjs",
     "test:tiles:browser": "node test/tiles-browser.mjs",
     "test:standalone": "node test/standalone.mjs",
-    "test:regressions": "node test/viewer-regressions.mjs"
+    "test:regressions": "node test/viewer-regressions.mjs",
+    "serve": "python serve.py",
+    "test:intel": "node test/intel.mjs",
+    "test:serve": "node test/serve.mjs",
+    "test:mobile": "node test/mobile.mjs"
   },
   "dependencies": {
-    "three": "0.180.0",
-    "decode-dxt": "1.0.1"
+    "decode-dxt": "1.0.1",
+    "satellite.js": "7.1.0",
+    "three": "0.180.0"
   },
   "devDependencies": {
     "esbuild": "0.28.2",

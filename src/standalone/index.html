@@ -6,5 +6,7 @@
 // UI mode: one call. API-only mode: use Tiles.Tiles2D / Tiles.Tiles3D directly (same bundle).
 const q=new URLSearchParams(location.search),n=k=>q.has(k)?Number(q.get(k)):undefined;
 window.viewer=Tiles.createViewer('#viewer',{view:q.get('view')||'flat',mode:q.get('mode')||'2d',latitude:n('lat'),longitude:n('lon'),zoom:n('zoom'),panel:q.get('panel')!=='0'});
+// Served by serve.py: its CORS proxy makes live aircraft work. Elsewhere (file://, GitHub Pages) nothing changes.
+if(location.protocol.startsWith('http'))fetch(new URL('proxy/health',location.href)).then(r=>r.ok?r.json():null).then(j=>{if(j?.ok)viewer.intel.set('aircraft',{proxyUrl:new URL('proxy?url=',location.href).href});}).catch(()=>{});
 </script>
 </body></html>

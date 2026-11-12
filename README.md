@@ -24,6 +24,25 @@ npm test
 It is published on GitHub Pages at <https://artur73737.github.io/tiles-3D-high-res/> on every push to `main`.
 It accepts `?view=flat|globe&mode=2d|3d|fly&lat=..&lon=..&zoom=..`.
 
+### Local server with CORS proxy
+
+```bash
+python serve.py                 # http://127.0.0.1:8080
+```
+
+`serve.py` uses only the Python standard library. It serves `standalone.html` and `dist/` (nothing
+else from the folder), with CORS headers. It also adds a CORS proxy, `/proxy?url=…`, for feeds that
+block browsers, such as live aircraft. When the page is opened through it, the viewer detects the proxy
+and turns live aircraft on by itself.
+
+The proxy is not open:
+
+- it accepts only GET over https;
+- it forwards only to the ADS-B hosts it knows, unless you pass `--allow HOST`;
+- responses are limited in size and time.
+
+It listens on 127.0.0.1 unless you pass `--host`.
+
 ## Load
 
 ```html
@@ -71,6 +90,46 @@ Loaded 3D tiles stay when the camera moves or turns. A tile is removed only in t
   textures. The farthest tiles go first. Browsers do not report VRAM, so the default is conservative:
   2048 MB on desktop, 512 MB on tablet, 256 MB on phone. Raise it to match your GPU (for example 8192
   on a 12 GB card).
+
+### Intelligence layers and tools
+
+The left sidebar has the live data layers and the measuring tools, in all views (flat 2D, flat 3D,
+globe).
+
+| Layer | Source | Notes |
+|---|---|---|
+| Aircraft | ADS-B (adsb.lol / adsb.fi) | needs a CORS proxy (`serve.py` provides one); from zoom 6 |
+| Satellites | CelesTrak + SGP4 | live positions, ground track of the selected one; one download per group every 2 h (cached) |
+| Earthquakes | USGS | past hour / day / week / month, by magnitude |
+| Natural events | NASA EONET | wildfires, volcanoes, storms, floods… |
+| Weather radar | RainViewer | flat 2D map |
+
+How the layers stay fast:
+
+- Data loads only for the visible area, on a grid that follows the zoom, once the camera stops.
+- Small pans reuse what is already loaded.
+- At low zoom, dense layers are drawn as dots (satellites) or counted bubbles; labels appear when you
+  zoom in.
+
+Click an object to see its details.
+
+Tools: distance, area, height (base then top, works on 3D buildings), elevation profile, line of sight
+and markers. For elevation they use the loaded Google 3D surface, or a terrain model where nothing 3D
+is loaded. Results export to and import from GeoJSON and KML.
+
+```js
+viewer.intel.enable('earthquakes');
+viewer.intel.set('earthquakes', { period: 'week', level: '4.5' });
+viewer.intel.set('aircraft', { proxyUrl: 'http://127.0.0.1:8080/proxy?url=' });
+viewer.intel.layers();                    // [{id, enabled, status, count, error, options}, ...]
+viewer.tools.start('distance');           // then click on the map; Enter / double-click finishes
+viewer.tools.items;                       // [{type, name, points, result: {text, ...}}, ...]
+const geojson = viewer.tools.exportGeoJSON();
+```
+
+The same building blocks work without the viewer: `Tiles.makeLayers()` returns the data sources (each
+has `load({bounds, zoom, options})`), and the bundle exports the geodesy helpers (`Tiles.distance`,
+`Tiles.polygonArea`, …), `Tiles.satellitePosition` and the GeoJSON / KML converters.
 
 ### Phones and tablets
 
@@ -173,5 +232,11 @@ API only in React works the same way: create a `Tiles2D` or `Tiles3D` in an effe
 src/tiles.js         bundle entry (global Tiles)
 src/core/            errors, geo, net/ (transport, cache, shared requests, priority), rocktree/ (decoder workers)
 src/api/             Tiles2D, Tiles3D, Geocoder, enhancer
-src/ui/              viewer, template, scene/ (globe, 3D streaming, fade, sharpen)
+src/core/            also geodesy (distances, areas, bounds)
+src/ui/              viewer, template, controls, input/ (device, gestures, fly pad),
+                     scene/ (globe, 3D streaming, fade, sharpen, map view: geo <-> screen in every view)
+src/intel/           scheduler (batched, zoom-aware loading), overlay, panel, popup, feed cache,
+                     layers/ (aircraft, satellites, earthquakes, events, radar)
+src/tools/           measuring tools, elevation, GeoJSON / KML
+serve.py             local server + restricted CORS proxy
 ```

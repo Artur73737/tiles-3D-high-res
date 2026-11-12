@@ -5,6 +5,12 @@ import {Tiles2D,GOOGLE_LAYERS,resolveLayers} from '../api/tiles2d.js';
 import {Tiles3D} from '../api/tiles3d.js';
 import {geoToECEF,ecefToGeo} from '../core/geo.js';
 import {HTML} from './template.js';
+import {createControls} from './controls.js';
+import {createMapView} from './scene/mapview.js';
+import {createIntel} from '../intel/index.js';
+import {createIntelPanel} from '../intel/panel.js';
+import {createPopup} from '../intel/popup.js';
+import {createTools} from '../tools/index.js';
 import {Geocoder} from '../api/geocode.js';
 import {TileEnhancer,enhanceSupported} from '../api/enhance.js';
 import {SharpenPass} from './scene/postfx.js';
@@ -108,49 +114,9 @@ export function createViewer(target,options={}){
  const status=(text,cls='')=>{const s=$('status');s.textContent=text;s.className=cls;emit('status',{text,level:cls||'info'});};
  const fail=e=>{status(e.message,'err');emit('error',e);};
 
- // ---------- controls ----------
- const controls=new Map();let menu=null;
- const closeMenu=()=>{if(!menu)return;menu.el.remove();menu.dd.classList.remove('open');menu.button.setAttribute('aria-expanded','false');menu=null;};
- function dropdown(parent,opts,value,onChange,label){
-  const dd=doc.createElement('div');dd.className='dd';const button=doc.createElement('button');button.type='button';button.setAttribute('aria-haspopup','listbox');button.setAttribute('aria-expanded','false');if(label)button.setAttribute('aria-label',label);
-  const text=doc.createElement('span'),caret=doc.createElement('i');button.append(text,caret);dd.append(button);parent.append(dd);
-  let current=value;const set=v=>{current=v;const o=opts.find(o=>String(o[0])===String(v));text.textContent=o?o[1]:String(v??'');};set(value);
-  const open=()=>{closeMenu();const ul=doc.createElement('ul');ul.className='menu';ul.setAttribute('role','listbox');let act=Math.max(0,opts.findIndex(o=>String(o[0])===String(current)));
-   const paint=()=>[...ul.children].forEach((li,i)=>{li.classList.toggle('act',i===act);if(i===act)li.scrollIntoView({block:'nearest'});});
-   opts.forEach(([v,l],i)=>{const li=doc.createElement('li');li.setAttribute('role','option');li.textContent=l;li.setAttribute('aria-selected',String(String(v)===String(current)));li.onpointerenter=()=>{act=i;paint();};li.onpointerdown=e=>{e.preventDefault();choose(i);};ul.append(li);});
-   const r=button.getBoundingClientRect(),below=win.innerHeight-r.bottom;ul.style.left=r.left+'px';ul.style.minWidth=r.width+'px';doc.body.append(ul);
-   const h=Math.min(ul.scrollHeight,280);if(below<h+8&&r.top>below)ul.style.top=(r.top-h+1)+'px';else ul.style.top=(r.bottom-1)+'px';
-   const choose=i=>{closeMenu();button.focus();const v=opts[i][0];if(String(v)!==String(current)){set(v);onChange(v);}};
-   menu={el:ul,dd,button,key:e=>{if(e.key==='ArrowDown'){act=Math.min(opts.length-1,act+1);paint();}else if(e.key==='ArrowUp'){act=Math.max(0,act-1);paint();}else if(e.key==='Enter'||e.key===' ')choose(act);else if(e.key==='Escape'){closeMenu();button.focus();}else return;e.preventDefault();}};
-   dd.classList.add('open');button.setAttribute('aria-expanded','true');paint();
-  };
-  button.onclick=()=>menu?.dd===dd?closeMenu():open();
-  button.onkeydown=e=>{if(menu?.dd===dd)return menu.key(e);if(['ArrowDown','ArrowUp','Enter',' '].includes(e.key)){e.preventDefault();open();}};
-  return {set,get:()=>current,el:dd};
- }
- doc.addEventListener('pointerdown',e=>{if(menu&&!menu.el.contains(e.target)&&!menu.dd.contains(e.target))closeMenu();});
- win.addEventListener('blur',closeMenu);doc.addEventListener('scroll',closeMenu,true);
- function stepper(parent,f,value,onChange){
-  const wrap=doc.createElement('div');wrap.className='step';const minus=doc.createElement('button'),input=doc.createElement('input'),plus=doc.createElement('button');
-  minus.type=plus.type='button';minus.textContent='−';plus.textContent='+';minus.setAttribute('aria-label','Decrease '+f.label);plus.setAttribute('aria-label','Increase '+f.label);input.inputMode='decimal';input.setAttribute('aria-label',f.label);if(f.placeholder)input.placeholder=f.placeholder;
-  wrap.append(minus,input,plus);parent.append(wrap);
-  const decimals=String(f.step??1).split('.')[1]?.length??0,fmt=v=>v==null?'':String(Number(v.toFixed(Math.max(decimals,3)))),clamp=v=>Math.min(f.max??Infinity,Math.max(f.min??-Infinity,v));
-  const set=v=>{input.value=fmt(v);};set(value);
-  const read=()=>{const t=input.value.trim();if(!t&&f.optional)return null;const v=Number(t);if(!Number.isFinite(v))throw new Error(f.label+': not a number');return clamp(v);};
-  const commit=v=>{set(v);onChange(v);};
-  const bump=d=>{let v;try{v=read();}catch{v=null;}const base=v??(d>0?(f.min??0):(f.max??f.min??0));commit(clamp(Number((base+d*(f.step??1)).toFixed(6))));};
-  let hold;const press=d=>{bump(d);let delay=380;const rep=()=>{bump(d);delay=Math.max(40,delay*.8);hold=setTimeout(rep,delay);};hold=setTimeout(rep,delay);};const release=()=>clearTimeout(hold);
-  for(const [b,d]of [[minus,-1],[plus,1]]){b.onpointerdown=e=>{e.preventDefault();press(d);};b.onpointerup=b.onpointerleave=release;b.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();bump(d);}};}
-  input.onkeydown=e=>{if(e.key==='ArrowUp'||e.key==='ArrowDown'){e.preventDefault();bump(e.key==='ArrowUp'?1:-1);}else if(e.key==='Enter')input.blur();};
-  input.onchange=()=>{try{commit(read());}catch(e){fail(e);set(cfgValue(f));}};
-  return {set};
- }
- function check(parent,label,value,onChange){
-  const el=doc.createElement('div');el.className='ck';el.tabIndex=0;el.setAttribute('role','checkbox');const box=doc.createElement('span');box.className='box';const t=doc.createElement('span');t.textContent=label;el.append(box,t);parent.append(el);
-  const set=v=>el.setAttribute('aria-checked',String(!!v));set(value);const toggle=()=>{const v=el.getAttribute('aria-checked')!=='true';set(v);onChange(v);};
-  el.onclick=toggle;el.onkeydown=e=>{if(e.key===' '||e.key==='Enter'){e.preventDefault();toggle();}};return {set,el};
- }
- const fieldId=(g,f)=>g+'.'+f.key;let cfgValue=f=>undefined;
+ // ---------- controls (src/ui/controls.js) ----------
+ const controls=new Map(),ui=createControls({doc,win,onError:fail}),{dropdown,stepper,check}=ui;
+ const fieldId=(g,f)=>g+'.'+f.key;
  function buildPanel(){
   const left=$('left'),right=$('right');left.textContent='';right.textContent='';
   for(const sec of SCHEMA){
@@ -173,7 +139,6 @@ export function createViewer(target,options={}){
   const a=doc.createElement('div');a.className='actions';a.innerHTML='<button id="clear" type="button">Clear cache</button><button id="reset" type="button">Reset</button>';right.append(a);
   refreshVisibility();
  }
- cfgValue=f=>{for(const c of controls.values())if(c.f===f)return cfg[c.group][f.key];};
  function refreshVisibility(){for(const c of controls.values())if(c.f.when)c.row.classList.toggle('hide',!c.f.when(cfg));}
  function syncControls(){for(const c of controls.values())c.ctl.set(cfg[c.group][c.f.key]);refreshVisibility();}
  let pendingApply=false,applyTimer=0;const dirty=()=>{pendingApply=true;$('apply')?.classList.add('on');clearTimeout(applyTimer);applyTimer=setTimeout(()=>{if(pendingApply)apply();},350);};
@@ -302,9 +267,10 @@ export function createViewer(target,options={}){
   return device;}
  $('scrim').addEventListener('click',()=>{togglePanel(false);toggleLayers(false);});
  win.addEventListener('resize',()=>{if((options.device??'auto')==='auto')applyDevice();placeDrawers();});
+ let intelFrame=null; // set once the intelligence layers exist (below)
  // Frames per second of the viewer loop, shown in the footer.
  let fpsFrames=0,fpsSince=win.performance.now(),fps=0;const fpsEl=$('fps');
- renderer.setAnimationLoop(()=>{const now=win.performance.now(),dt=Math.min(.1,(now-last)/1000);last=now;updateNeedle();tiles.tick(now);
+ renderer.setAnimationLoop(()=>{const now=win.performance.now(),dt=Math.min(.1,(now-last)/1000);last=now;updateNeedle();tiles.tick(now);intelFrame?.(now);
   fpsFrames++;if(now-fpsSince>=500){fps=fpsFrames*1000/(now-fpsSince);fpsFrames=0;fpsSince=now;fpsEl.textContent=Math.round(fps)+' fps';}
   if(state.view==='globe'){globe.update(dt);if(active3d()){sharpen.setSharpness(cfg.enhance.sharpness3d);sharpen.render(globe.scene,camera);}else renderer.render(globe.scene,camera);return;}
   if(state.mode==='2d')return;
@@ -392,6 +358,26 @@ export function createViewer(target,options={}){
  function toggleLayers(open){const want=open??app.classList.contains('no-left');if(want&&app.dataset.input==='touch'&&!app.classList.contains('no-right'))togglePanel(false);app.classList.toggle('no-left',!want);$('toggleLeft').classList.toggle('on',want);return controller;}
 
  buildPanel();
+ // ---------- intelligence layers and tools (src/intel, src/tools) ----------
+ const stageEl=$('stage');
+ const map=createMapView({state,stage:stageEl,camera,globe,world,orbit,origin:()=>origin,enu,project,unproject,groundAlt:()=>globe.ground()});
+ let panel=null,popup=null;const changed=()=>{panel?.schedule();popup?.render(intel.selected);app.classList.toggle('tool-on',!!tools.active);};
+ const tools=createTools({map,onChange:()=>{intel?.redraw();changed();}});
+ const intel=createIntel({doc,win,stage:stageEl,map,tools,options:options.intel??{},onChange:changed,onError:(l,e)=>emit('error',e),onZoomTo:(lat,lon,zoom)=>safe(()=>goTo({latitude:lat,longitude:lon,zoom}))});
+ const download=(name,text,type)=>{const url=URL.createObjectURL(new win.Blob([text],{type})),a=doc.createElement('a');a.href=url;a.download=name;doc.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),5000);};
+ panel=createIntelPanel({doc,ui,intel,tools,download,notify:(t,c)=>status(t,c==='err'?'err':''),onFocus:(lat,lon)=>safe(()=>goTo({latitude:lat,longitude:lon}))});panel.mount($('left'));
+ popup=createPopup({doc,stage:stageEl,onClose:()=>intel.select(null)});
+ intelFrame=now=>{intel.frame(now);if(intel.selected)popup.render(intel.selected);};
+ // A click (press and release without dragging) goes to the active tool, else selects a feature.
+ {let down=null;
+  // Event timestamps (when the finger / button acted), not handling time: a long frame between the two
+  // handlers must not turn a quick tap into a long press.
+  stageEl.addEventListener('pointerdown',e=>{down=e.isPrimary?{x:e.clientX,y:e.clientY,t:e.timeStamp,id:e.pointerId}:null;},true);
+  stageEl.addEventListener('pointerup',e=>{const d=down;down=null;if(!d||d.id!==e.pointerId||e.button>0||doc.pointerLockElement)return;
+   if(Math.hypot(e.clientX-d.x,e.clientY-d.y)>6||e.timeStamp-d.t>700)return;if(e.target.closest('button,.navctl,.intel-popup,.flypad'))return;
+   const r=stageEl.getBoundingClientRect(),x=e.clientX-r.left,y=e.clientY-r.top;if(!tools.click(x,y))intel.click(x,y);},true);
+  stageEl.addEventListener('dblclick',e=>{if(tools.active){e.preventDefault();tools.finish();}});
+  win.addEventListener('keydown',e=>{if(!tools.active||e.target.tagName==='INPUT')return;if(e.key==='Enter'){tools.finish();e.preventDefault();}else if(e.key==='Escape'){tools.cancel();}else if(e.key==='Backspace'){tools.undo();e.preventDefault();}});}
  for(const b of doc.querySelectorAll('header [data-mode]'))b.onclick=()=>setMode(b.dataset.mode);
  for(const b of doc.querySelectorAll('header [data-view]'))b.onclick=()=>setView(b.dataset.view);
  $('enhance').onclick=()=>{const k=state.mode==='2d'?'enabled2d':'enabled3d';set({enhance:{[k]:!cfg.enhance[k]}});};
@@ -426,11 +412,15 @@ export function createViewer(target,options={}){
  applyDevice();
  controller={iframe,window:win,document:doc,
   get tiles2d(){return client2d;},get tiles3d(){return client3d;},get mode(){return state.mode;},
-  zoomIn:()=>zoomStep(1),zoomOut:()=>zoomStep(-1),resetNorth,getHeading:()=>currentHeading(),toggleLayers,searchPlaces,getDevice:()=>device,setDevice:d=>{if(d!=='auto'&&!DEVICES.includes(d))throw new Error('device must be auto, '+DEVICES.join(', '));options.device=d;applyDevice(d);return controller;},setGeocoder:o=>{geocoder.set(o);results=[];resultsFor=null;return controller;},geocoder,setMode,setView,goTo,set,apply,getConfig,getView,togglePanel,findMaxZoom,exportPNG,getEnhanceState,setEnhance:(e)=>set({enhance:e}),get view(){return state.view;},globe,
+  zoomIn:()=>zoomStep(1),zoomOut:()=>zoomStep(-1),resetNorth,getHeading:()=>currentHeading(),toggleLayers,searchPlaces,
+  // Intelligence layers: enable / configure / read. Tools: measure, annotate, import / export.
+  intel:{layers:()=>intel.layers.map(l=>({id:l.id,label:l.label,group:l.group,source:l.source,enabled:intel.isEnabled(l.id),options:{...l.options},...intel.state(l.id)})),enable:(id,on=true)=>{intel.enable(id,on);return controller;},set:(id,o)=>{intel.setOptions(id,o);return controller;},features:id=>intel.features(id),get drawStats(){return intel.drawStats;},get selected(){return intel.selected;},select:(id,fid)=>{const l=intel.layers.find(x=>x.id===id),f=intel.features(id).find(x=>x.id===fid);intel.select(l&&f?{layer:l,feature:f}:null);return controller;}},
+  tools:{start:t=>{tools.start(t);return controller;},finish:()=>tools.finish(),cancel:()=>{tools.cancel();return controller;},click:(x,y)=>tools.click(x,y),get items(){return tools.items;},get active(){return tools.active;},get draft(){return tools.draft;},remove:id=>{tools.remove(id);return controller;},clear:()=>{tools.clear();return controller;},exportGeoJSON:()=>tools.exportGeoJSON(),exportKML:()=>tools.exportKML(),import:(text,name)=>tools.import(text,name)},
+  map,getDevice:()=>device,setDevice:d=>{if(d!=='auto'&&!DEVICES.includes(d))throw new Error('device must be auto, '+DEVICES.join(', '));options.device=d;applyDevice(d);return controller;},setGeocoder:o=>{geocoder.set(o);results=[];resultsFor=null;return controller;},geocoder,setMode,setView,goTo,set,apply,getConfig,getView,togglePanel,findMaxZoom,exportPNG,getEnhanceState,setEnhance:(e)=>set({enhance:e}),get view(){return state.view;},globe,
   getFps:()=>fps,getStats:()=>({fps,globe:state.view==='globe'?globe.stats():null,enhancer:enhancer?.stats??null,view:getView(),tiles2d:client2d?.getStats()??null,tiles3d:client3d?.getStats()??null,mesh:tiles.stats(),loaded2d:[...bitmaps.values()].filter(b=>b.bmp).length}),
   on(type,fn){if(!listeners.has(type))listeners.set(type,new Set());listeners.get(type).add(fn);return ()=>listeners.get(type).delete(fn);},
   off(type,fn){listeners.get(type)?.delete(fn);},
-  async destroy(){win.clearInterval(statusTimer);globe.dispose();sharpen.dispose();enhancer?.dispose();ro.disconnect();renderer.setAnimationLoop(null);clear3d();renderer.dispose();bitmaps.forEach(b=>b.bmp?.close());await Promise.all([client2d?.dispose(),client3d?.dispose()]);iframe.remove();listeners.clear();},
+  async destroy(){win.clearInterval(statusTimer);intel.dispose();popup.dispose();globe.dispose();sharpen.dispose();enhancer?.dispose();ro.disconnect();renderer.setAnimationLoop(null);clear3d();renderer.dispose();bitmaps.forEach(b=>b.bmp?.close());await Promise.all([client2d?.dispose(),client3d?.dispose()]);iframe.remove();listeners.clear();},
   _internal:{camera,keys,loaded:tiles.loaded,globe,bitmaps:()=>bitmaps,stats3d:()=>tiles.stats()}};
  syncCoords();safe(apply2d);app.dataset.view=state.view;for(const b of doc.querySelectorAll('header [data-view]'))b.classList.toggle('on',b.dataset.view===state.view);if(state.view==='globe')groundFor(state.lat,state.lon);setMode(state.mode);
  return controller;

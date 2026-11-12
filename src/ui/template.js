@@ -71,6 +71,25 @@ h3 button{height:22px;padding:0 9px;font-size:10px}
 /* Crosshair: the backdrop under each line is inverted and thresholded, so it is light over dark imagery and dark over light imagery. */
 .cross{position:absolute;left:50%;top:50%;width:13px;height:13px;margin:-6px 0 0 -6px;pointer-events:none;z-index:1}.cross:before,.cross:after{content:'';position:absolute;background:transparent;-webkit-backdrop-filter:invert(1) grayscale(1) contrast(100);backdrop-filter:invert(1) grayscale(1) contrast(100)}.cross:before{left:6px;top:0;width:1px;height:13px}.cross:after{left:0;top:6px;width:13px;height:1px}
 @media (max-width:820px){.app[data-input="mouse"] .side{position:absolute;top:48px;bottom:0;z-index:6;width:min(300px,86vw)}.app[data-input="mouse"] #left{left:0}.app[data-input="mouse"] #right{right:0}.app[data-input="mouse"] .center{grid-column:1/4!important}.app[data-input="mouse"] .search{width:200px}}
+/* ---------- intelligence and tools (left sidebar, overlay, popup) ---------- */
+.intel-group{margin:10px 0 4px;font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:#555}
+.intel-layer{display:flex;align-items:center;justify-content:space-between;gap:8px}.intel-layer .checks{padding:4px 0;flex:1}
+.badge{font-size:10px;color:var(--dim);font-variant-numeric:tabular-nums;white-space:nowrap}.badge.err{color:var(--err);cursor:help}
+.intel-opts{margin:2px 0 8px 20px;padding-left:10px;border-left:1px solid var(--line)}.intel-opts .row{grid-template-columns:84px minmax(0,1fr)}.intel-opts .hint{margin:2px 0 4px}
+.tool-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}.tool-grid button{padding:0 6px;font-size:10px}
+.tool-hint{min-height:28px}.tool-draft{padding:0 0 8px}.tool-io{padding:8px 0 0}.tool-io button{padding:0 6px;font-size:10px}
+.tool-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;max-height:260px;overflow:auto;scrollbar-width:thin}
+.tool-list li{background:#121212;border:1px solid var(--line);border-radius:var(--r);padding:6px 7px;cursor:pointer}.tool-list li.sel{border-color:var(--dim)}
+.tl-top{display:flex;align-items:center;gap:6px}.tl-top i{width:8px;height:8px;border-radius:2px;flex:none}.tl-top input{height:24px;padding:0 6px;background:transparent;border-color:transparent}.tl-top input:focus{border-color:var(--line2)}
+.tl-top button{width:24px;height:24px;padding:0;font-size:13px;letter-spacing:0}.tool-list small{display:block;color:var(--dim);margin:3px 0 0 14px;font-size:10px;line-height:1.35}.tool-list small.err{color:var(--err)}
+.profile-chart:not(:empty){margin-top:8px;background:#0a0a0a;border:1px solid var(--line);border-radius:var(--r);padding:4px}
+.intel-popup{position:absolute;right:52px;top:10px;width:min(300px,calc(100% - 64px));max-height:calc(100% - 20px);overflow:auto;z-index:4;background:rgba(12,12,12,.94);backdrop-filter:blur(6px);border:1px solid #2a2a2a;border-radius:var(--r);box-shadow:0 6px 24px rgba(0,0,0,.55);padding:8px 10px;font-size:11px}
+.ip-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}.ip-head b{color:var(--hi);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ip-head button{width:22px;height:22px;padding:0;font-size:13px}
+.intel-popup dl{display:grid;grid-template-columns:auto minmax(0,1fr);gap:3px 10px;margin:0}.intel-popup dt{color:var(--dim)}.intel-popup dd{margin:0;overflow-wrap:anywhere}.intel-popup a{color:#64d2ff}
+.ip-coords{margin-top:6px;color:var(--dim);font-variant-numeric:tabular-nums}
+.app.tool-on .stage,.app.tool-on #map2d{cursor:crosshair}
+.app[data-input="touch"] .intel-popup{left:8px;right:8px;top:auto;bottom:8px;width:auto;max-height:45%}
+.app[data-input="touch"] .tool-grid button,.app[data-input="touch"] .tool-io button{font-size:11px}
 /* ---------- touch devices (tablet, mobile). Desktop rules above are unchanged. ---------- */
 .flypad,.scrim,.help.touch{display:none}
 .app[data-input="touch"]{--h:38px;grid-template-rows:auto minmax(0,1fr)}
