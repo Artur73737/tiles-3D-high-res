@@ -31,7 +31,7 @@ export async function fetchJson(url,{signal,timeoutMs=20000,fetch:fetcher=global
   let res;
   try{res=await fetcher(url,{signal:ctl.signal,headers:{Accept:'application/json'}});}
   catch(e){if(timedOut)throw new TileError('timeout','No answer within '+timeoutMs/1000+' s: '+url,{url});if(e?.name==='AbortError')throw e;throw new TileError('network_error','Request failed (network or CORS): '+url,{url});}
-  if(!res.ok)throw new TileError('http_error','HTTP '+res.status+' for '+url,{url,status:res.status});
+  if(!res.ok)throw new TileError('http_error','HTTP '+res.status+' for '+url,{url,status:res.status,retryAfterS:Number(res.headers?.get?.('retry-after'))||null});
   try{return await res.json();}catch(e){if(timedOut)throw new TileError('timeout','No answer within '+timeoutMs/1000+' s: '+url,{url});throw e;}
  }finally{clearTimeout(timer);signal?.removeEventListener('abort',stop);}
 }

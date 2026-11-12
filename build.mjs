@@ -1,4 +1,5 @@
 import {build} from 'esbuild';
+import {LOGO_FAVICON as FAVICON} from './src/ui/logo.js';
 import {readFileSync,writeFileSync,mkdirSync,existsSync} from 'node:fs';
 import {dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -16,5 +17,5 @@ await build({...options,entryPoints:['src/index.js'],format:'esm',external:['thr
 const notice=n=>{const d='node_modules/'+n+'/',f=['LICENSE','LICENSE.md','LICENSE.txt'].find(x=>existsSync(d+x));return n+'\n'+readFileSync(d+f,'utf8');};
 const licenses=['three','decode-dxt','satellite.js'].map(notice).join('\n\n');
 for(const name of ['earth-hq.bundle.js','earth-hq.esm.js','3d_tiles.bundle.min.js'])writeFileSync('dist/'+name,readFileSync('dist/'+name,'utf8')+'\n/* Bundled library notices\n'+licenses.replaceAll('*/','* /')+'\n*/\n');
-{const esc=x=>x.replaceAll('</script','<\\/script');const page=readFileSync('src/standalone/index.html','utf8').replace('__TILES__',()=>esc(readFileSync('dist/3d_tiles.bundle.min.js','utf8')));writeFileSync('standalone.html',page+'\n<!-- Bundled library notices\n'+licenses+'\n-->\n');}
+{const esc=x=>x.replaceAll('</script','<\\/script');const page=readFileSync('src/standalone/index.html','utf8').replace('__FAVICON__',()=>FAVICON).replace('__TILES__',()=>esc(readFileSync('dist/3d_tiles.bundle.min.js','utf8')));writeFileSync('standalone.html',page+'\n<!-- Bundled library notices\n'+licenses+'\n-->\n');}
 console.log(JSON.stringify({tilesBytes:readFileSync('dist/3d_tiles.bundle.min.js').length,standaloneBytes:readFileSync('dist/earth-hq.bundle.js').length,esmBytes:readFileSync('dist/earth-hq.esm.js').length}));

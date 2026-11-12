@@ -8,7 +8,11 @@
 // Loading follows the view without large bursts:
 // - one request covers a circle of up to 250 NM (the API limit); a wider view uses at most
 //   `maxRequests` (5) circles: the centre plus four spread over the view (see coverage), one at a time, 1 s apart,
-//   each shown as it arrives; a 429 (rate limit) ends the round and keeps what arrived;
+//   each shown as it arrives;
+// - circles snap to a fixed lattice and each answer is reused until it is due again, so panning does
+//   not repeat requests;
+// - HTTP 429 (rate limit) pauses all requests (Retry-After, else 30 s doubling to 5 min); meanwhile
+//   cached aircraft stay on the map;
 // - wide views refresh less often (refreshAt), close views every 10 s;
 // - between refreshes each aircraft moves along its track at its ground speed (dead reckoning), so
 //   markers and the selection follow it smoothly.
@@ -56,20 +60,30 @@ export const aircraft=defineLayer({
  schema:[{key:'source',label:'Source',type:'select',options:Object.entries(AIRCRAFT_SOURCES).map(([k,[l]])=>[k,l])},
   {key:'proxyUrl',label:'CORS proxy',type:'text',placeholder:'https://proxy/?url='}],
  hint:'ADS-B services block browsers (CORS): set a proxy you control, or open the viewer through serve.py.',
- async load({bounds,signal,options,emit}){
+ async load({bounds,zoom,signal,options,emit}){
   if(!options.proxyUrl)throw new TileError('cors_blocked','Aircraft need a CORS proxy: set "CORS proxy" in the layer options, or open the viewer through serve.py.');
-  // One request at a time, spaced out; results are shown as each one arrives. HTTP 429 (rate limited)
-  // ends the round: what arrived is kept and the next round waits for the refresh interval.
-  const circles=coverage(bounds,{maxRequests:options.maxRequests}),byId=new Map(),tpl=AIRCRAFT_SOURCES[options.source][1];let failures=0,lastError=null,limited=false;
-  for(let i=0;i<circles.length;i++){
-   if(i)await new Promise((r,j)=>{const t=setTimeout(r,options.spacingMs);signal?.addEventListener('abort',()=>{clearTimeout(t);j(new DOMException('Aborted','AbortError'));},{once:true});});
-   const c=circles[i],upstream=tpl.replace('{lat}',c.lat.toFixed(4)).replace('{lon}',c.lon.toFixed(4)).replace('{nm}',c.nm);
-   try{const j=await fetchJson(options.proxyUrl+encodeURIComponent(upstream),{signal}),now=Date.now();
-    for(const a of j.ac??j.aircraft??[])if(Number.isFinite(a.lat)&&Number.isFinite(a.lon)&&!byId.has(a.hex))byId.set(a.hex,parse(a,now));
-    if(i<circles.length-1)emit?.([...byId.values()]);}
-   catch(e){if(e?.name==='AbortError')throw e;failures++;lastError=e;if(e?.details?.status===429){limited=true;break;}}
+  // Per-viewer state: recent answers per circle, and the rate-limit pause.
+  const st=this._state??={circles:new Map(),coolUntil:0,strikes:0},now0=Date.now(),fresh=this.refreshAt(zoom)*.9;
+  // Circles snap to a fixed lattice, so a small pan asks for the same circles (reused from cache).
+  const circles=coverage(bounds,{maxRequests:options.maxRequests}).map(c=>{const q=c.nm>=MAX_NM?1:.1;return {lat:Math.round(c.lat/q)*q,lon:Math.round(c.lon/q)*q,nm:c.nm>=MAX_NM?MAX_NM:Math.min(MAX_NM,Math.ceil(c.nm/10)*10+10)};});
+  const tpl=AIRCRAFT_SOURCES[options.source][1],byId=new Map(),add=list=>{for(const f of list)if(!byId.has(f.id))byId.set(f.id,f);};
+  let failures=0,lastError=null,requested=0;
+  for(const c of circles){
+   const key=options.source+':'+c.lat.toFixed(1)+','+c.lon.toFixed(1)+','+c.nm,hit=st.circles.get(key);
+   // Fresh answer for this circle, or paused after a 429: no request, use what is cached.
+   if(hit&&(now0-hit.t<fresh||Date.now()<st.coolUntil)){add(hit.list);continue;}
+   if(Date.now()<st.coolUntil)continue;
+   if(requested++)await new Promise((r,j)=>{const t=setTimeout(r,options.spacingMs);signal?.addEventListener('abort',()=>{clearTimeout(t);j(new DOMException('Aborted','AbortError'));},{once:true});});
+   const upstream=tpl.replace('{lat}',c.lat.toFixed(4)).replace('{lon}',c.lon.toFixed(4)).replace('{nm}',c.nm);
+   try{const j=await fetchJson(options.proxyUrl+encodeURIComponent(upstream),{signal}),now=Date.now(),list=[];
+    for(const a of j.ac??j.aircraft??[])if(Number.isFinite(a.lat)&&Number.isFinite(a.lon))list.push(parse(a,now));
+    st.circles.set(key,{t:now,list});st.strikes=0;add(list);emit?.([...byId.values()]);
+    while(st.circles.size>64)st.circles.delete(st.circles.keys().next().value);}
+   catch(e){if(e?.name==='AbortError')throw e;failures++;lastError=e;
+    // Rate limited: pause every request (Retry-After if given, else 30 s doubling up to 5 min).
+    if(e?.details?.status===429){st.strikes++;st.coolUntil=Date.now()+(e.details.retryAfterS?e.details.retryAfterS*1000:Math.min(300e3,30e3*2**(st.strikes-1)));break;}}
   }
-  if(!byId.size&&failures)throw limited?new TileError('rate_limited','ADS-B service rate limit reached: retrying later.'):lastError;
+  if(!byId.size&&(failures||Date.now()<st.coolUntil))throw Date.now()<st.coolUntil?new TileError('rate_limited','ADS-B service rate limit reached: paused for '+Math.ceil((st.coolUntil-Date.now())/1000)+' s.'):lastError;
   return [...byId.values()];
  },
  // Dead reckoning along the track; returns true when something moved (the overlay redraws at most 4 Hz).

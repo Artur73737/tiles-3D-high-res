@@ -8,6 +8,7 @@ export {geoToECEF,ecefToGeo} from './core/geo.js';
 export {Geocoder,GEOCODER_PROVIDERS,zoomForBounds} from './api/geocode.js';
 export {TileEnhancer,enhanceSupported,CAS_GLSL} from './api/enhance.js';
 export {SharpenPass} from './ui/scene/postfx.js';
+export {LOGO_SVG,LOGO_FAVICON} from './ui/logo.js';
 // Intelligence layers (data sources usable without the viewer) and measuring helpers.
 export {makeLayers,LAYER_IDS} from './intel/index.js';
 export {snapBounds} from './intel/scheduler.js';

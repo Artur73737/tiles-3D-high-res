@@ -51,6 +51,7 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Accept, Content-Type")
+        self.send_header("Access-Control-Expose-Headers", "Retry-After")
         self.send_header("Cache-Control", "no-cache")
         super().end_headers()
 
@@ -88,13 +89,23 @@ class Handler(SimpleHTTPRequestHandler):
         self.path = public
         return super().do_HEAD()
 
-    def send_json(self, status, body):
+    def send_json(self, status, body, headers=None):
         data = json.dumps(body).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
+        for k, v in (headers or {}).items():
+            self.send_header(k, v)
         self.end_headers()
         self.wfile.write(data)
+
+    # The viewer cancels requests it no longer needs (the view moved): writing the answer then fails
+    # because the browser closed the connection. That is normal, not an error worth a traceback.
+    def handle(self):
+        try:
+            super().handle()
+        except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
+            self.close_connection = True
 
     def proxy(self):
         query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
@@ -105,20 +116,24 @@ class Handler(SimpleHTTPRequestHandler):
         if parts.hostname not in self.allowed:
             return self.send_json(HTTPStatus.FORBIDDEN, {"error": f"host not allowed: {parts.hostname}", "allowed": sorted(self.allowed)})
         request = urllib.request.Request(target, headers={"User-Agent": USER_AGENT, "Accept": self.headers.get("Accept", "*/*")})
+        # 1. Upstream only: its failures become an error answer for the browser.
         try:
             with urllib.request.urlopen(request, timeout=TIMEOUT_S) as upstream:
                 body = upstream.read(MAX_BYTES + 1)
-                if len(body) > MAX_BYTES:
-                    return self.send_json(HTTPStatus.BAD_GATEWAY, {"error": "upstream response too large"})
-                self.send_response(upstream.status)
-                self.send_header("Content-Type", upstream.headers.get("Content-Type", "application/octet-stream"))
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
+                status, ctype = upstream.status, upstream.headers.get("Content-Type", "application/octet-stream")
         except urllib.error.HTTPError as e:
-            self.send_json(e.code, {"error": f"upstream HTTP {e.code}"})
+            headers = {"Retry-After": e.headers["Retry-After"]} if e.headers.get("Retry-After") else {}
+            return self.send_json(e.code, {"error": f"upstream HTTP {e.code}"}, headers)
         except (urllib.error.URLError, TimeoutError, OSError) as e:
-            self.send_json(HTTPStatus.BAD_GATEWAY, {"error": f"upstream unreachable: {getattr(e, 'reason', e)}"})
+            return self.send_json(HTTPStatus.BAD_GATEWAY, {"error": f"upstream unreachable: {getattr(e, 'reason', e)}"})
+        if len(body) > MAX_BYTES:
+            return self.send_json(HTTPStatus.BAD_GATEWAY, {"error": "upstream response too large"})
+        # 2. Answer the browser. If it already gave up (request cancelled), handle() drops the connection.
+        self.send_response(status)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def log_message(self, fmt, *args):
         sys.stderr.write("%s - %s\n" % (self.address_string(), fmt % args))

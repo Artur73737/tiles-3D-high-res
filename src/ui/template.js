@@ -1,6 +1,7 @@
 // Viewer document (rendered inside the iframe created by createViewer).
 // Layout: navbar (full width) / left sidebar (layers, enhance) / main view + footer / right sidebar
 // (options). Corners get a 7px radius only where they do not touch the window edges.
+import {LOGO_SVG,LOGO_FAVICON} from './logo.js';
 export const CSS=`
 :root{--bg:#383838;--panel:#0e0e0e;--raise:#171717;--line:#222;--line2:#323232;--text:#d8d8d8;--dim:#767676;--hi:#fff;--warn:#d9a53f;--err:#e5484d;--h:28px;--r:7px;--gap:4px;--mono:ui-monospace,'SF Mono','Cascadia Mono',Consolas,monospace}
 *{box-sizing:border-box}
@@ -16,7 +17,7 @@ input{height:var(--h);padding:0 9px;width:100%;min-width:0;font-variant-numeric:
 /* layout */
 .app{display:grid;grid-template-columns:auto minmax(0,1fr) auto;grid-template-rows:44px minmax(0,1fr);gap:var(--gap);height:100%}
 header{grid-column:1/4;display:flex;align-items:center;gap:8px;padding:0 8px;background:var(--panel);border-bottom:1px solid var(--panel);overflow-x:auto;overflow-y:hidden;scrollbar-width:none}
-.brand{color:var(--hi);letter-spacing:.3em;font-size:11px;padding:0 8px 0 4px;flex:none}
+.brand{color:var(--hi);letter-spacing:.3em;font-size:11px;padding:0 8px 0 2px;flex:none;display:inline-flex;align-items:center;gap:9px}.brand .logo{display:block;flex:none}
 .grow{flex:1}
 .side{grid-row:2;width:268px;overflow:auto;background:var(--panel);scrollbar-width:thin;scrollbar-color:var(--line2) transparent}
 #left{grid-column:1;border:1px solid var(--panel);border-width:1px 1px 0 0;border-top-right-radius:var(--r)}
@@ -97,7 +98,8 @@ html:has(.app[data-input="touch"]),body:has(.app[data-input="touch"]){overscroll
 .app[data-input="touch"] button{font-size:12px;touch-action:manipulation}
 .app[data-input="touch"] input{font-size:16px}
 .app[data-input="touch"] header{flex-wrap:wrap;overflow:visible;padding:7px 8px;gap:7px;user-select:none;-webkit-user-select:none}
-.app[data-input="touch"] .brand{display:none}
+/* phones and tablets: the mark only, the word needs the room */
+.app[data-input="touch"] .brand{order:0;padding:0 2px;gap:0}.app[data-input="touch"] .brand>span{display:none}
 .app[data-input="touch"] #toggleLeft{order:1}.app[data-input="touch"] .search{order:2;flex:1 1 0;width:auto;min-width:0}.app[data-input="touch"] #toggle{order:3}
 .app[data-input="touch"] .grow{order:4;flex-basis:100%;height:0}
 .app[data-input="touch"] header .group{order:5;flex:1 1 auto}.app[data-input="touch"] header .group>*{flex:1}
@@ -130,10 +132,10 @@ html:has(.app[data-input="touch"]),body:has(.app[data-input="touch"]){overscroll
 @media (orientation:landscape) and (max-height:500px){.app[data-input="touch"]{--h:36px}.app[data-input="touch"] header{flex-wrap:nowrap;padding:5px 8px;gap:6px}.app[data-input="touch"] .grow{display:none}.app[data-input="touch"] header .group{order:2;flex:none}.app[data-input="touch"] header .group>*{flex:none;padding:0 10px}.app[data-input="touch"] .search{order:3;min-width:120px}.app[data-input="touch"] header .group.m2{order:4}.app[data-input="touch"] #toggle{order:5}}
 @media (orientation:landscape) and (max-height:500px){.app[data-input="touch"] .stick{width:104px;height:104px}.app[data-input="touch"] .updown button{width:44px;height:44px}}
 `;
-export const HTML=`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Tiles</title><style>${CSS}</style></head><body>
+export const HTML=`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Tiles</title><link rel="icon" type="image/svg+xml" href="${LOGO_FAVICON}"><style>${CSS}</style></head><body>
 <div class="app" id="app" data-mode="2d">
 <header>
- <span class="brand">TILES</span>
+ <span class="brand">${LOGO_SVG}<span>TILES</span></span>
  <button id="toggleLeft" class="on" aria-label="Layers panel">Layers</button>
  <div class="group" role="tablist" aria-label="View"><button data-view="flat">Flat</button><button data-view="globe">Globe</button></div>
  <div class="group" role="tablist" aria-label="Mode"><button data-mode="2d">2D</button><button data-mode="3d">3D</button><button data-mode="fly">3D Fly</button></div>
